@@ -15,32 +15,65 @@
         <form [formGroup]="registrierungForm" (ngSubmit)="onSubmit()">
           <br /><br />
 
-          <!--
-          <mat-form-field appearance="outline">
-            <mat-label>matriculation number</mat-label>
-            <input matInput formControlName="matnr" required />
-            <mat-hint>8 digits, no letters</mat-hint>
-          </mat-form-field>
-          &nbsp;
-          <br /><br />
-
-          <mat-form-field appearance="outline">
-            <mat-label>course</mat-label>
-            <input matInput formControlName="lv" required />
-          </mat-form-field>
-          &nbsp;
-
-        -->
-
           <div style="text-align: left">
           <p>
-            The web service “StatsBot” stores first names, surnames, matriculation numbers, chat histories, and a number of tokens used in a web database of the Vienna University Computer Center (ZID). The storage of this data is necessary to allow student to access their own chat histories from the past. In addition, chat histories are exported and analyzed for scientific purposes without personal reference (anonymized). The anonymized data will be retained for a minimum of 5 years. The anonymized dataset may be publicly shared in accordance with open science practices. Participants can request the deletion of their data within three months after their usage of StatsBot, by contacting the coordinator, who is listed in the StatsBot guidebook. The <a href="https://zid.univie.ac.at/en/azure/data-protection-and-data-security" target="_blank"> data protection regulations</a> of the University of Vienna for Microsoft Azure Cloud Services apply to the generation of StatsBot responses. It should be noted that the StatsBot does not transfer any personal data to cloud services, the data centers of the services are located within the EU.
-         </p>
+            Liebe*r Studierende*r,
+            <br><br>
+            mit der Nutzung des Webservices „StatsBot“ erklären Sie sich damit einverstanden, dass Ihr Vorname,
+            Nachname und Matrikelnummer sowie Ihre Chatverläufe und die Anzahl der verwendeten Token in einer Webdatenbank
+            des Zentralen Informatikdienstes der Universität Wien (ZID)
+            gespeichert werden. Die Speicherung dieser Daten ist notwendig, um Ihnen Zugang zu Ihren eigenen
+            früheren Chatverläufen ermöglichen zu können. Um Antworten für „StatsBot“ zu generieren, werden
+            Ihre Chatnachrichten an ein großes Sprachmodell von Microsoft Azure gesendet und auf deren
+            Servern verarbeitet. Für diesen Vorgang gelten die Datenschutzbestimmungen der Universität Wien
+            für Microsoft Azure Cloud Services (<a href="https://zid.univie.ac.at/en/azure/data-protection-and-data-security/">https://zid.univie.ac.at/en/azure/data-protection-and-data-security/</a>").
+            Es wird darauf hingewiesen, dass „StatsBot“ keine personenbezogenen Daten an diese
+            Cloud-Dienste übermittelt und sich die Rechenzentren aller Dienste innerhalb der EU befinden.
+            <br><br>
+            Darüber hinaus erklären Sie sich mit der Nutzung des Webdienstes „StatsBot“ damit einverstanden,
+            dass alle Ihre Chatverläufe bis Ende Juni 2025 zum Zweck wissenschaftlicher Begleitforschung
+            exportiert und analysiert werden können. Uns interessiert, wie Nutzer*innen mit „StatsBot“
+            interagieren und welche Arten von Abfragen sie stellen (weitere Informationen unter
+            <a href="https://osf.io/v8ydk/">https://osf.io/v8ydk/)</a>. Zu diesem Zweck wird Ihr Chatverlauf pseudonymisiert, d.h. alle damit
+            verbundenen persönlichen Informationen werden entfernt, und bis Ende 2025 auf einem
+            passwortgeschützten lokalen Speichermedium gespeichert. Sie können die Löschung dieser Daten bis
+            Ende Juli 2025 beantragen, indem Sie sich an das Koordinierungsteam unter
+            daniel.reiter&#64;univie.ac.at wenden. Danach werden Ihre Chatverläufe anonymisiert und zu einem
+            Datensatz mit anonymisierten Chatverläufen von Studierenden hinzugefügt, der im Einklang mit den
+            Praktiken von Open Science später öffentlich zugänglich gemacht werden kann (z. B. auf OSF). Ihre
+            pseudonymisierten Chatverläufe werden in diesem Prozess dauerhaft gelöscht.
+          </p>
+          <br><br>
+          <p>
+            Dear student,
+            <br><br>
+            with the use of the web service “StatsBot” you agree that your first name, surname, matriculation
+            number, chat histories, and number of tokens used will be stored in a web database of the Vienna
+            University Computer Center (ZID). The storage of this data is necessary to allow you access to your
+            own chat histories from the past. To generate responses from “StatsBot”, your chat messages are
+            sent to a large language model from Microsoft Azure and processed on their servers. For this process,
+            the data protection regulations of the University of Vienna for Microsoft Azure Cloud Services apply
+            (<a href="https://zid.univie.ac.at/en/azure/data-protection-and-data-security/">https://zid.univie.ac.at/en/azure/data-protection-and-data-security/</a>). It should be noted that
+            “StatsBot” does not transfer any personal data to such cloud services, and the data centers of all
+            services are located within the EU.
+            <br><br>
+            In addition, with the use of the web service “StatsBot” you agree that all your chat histories until end
+            of June 2025 can be exported and analyzed for the purpose of scientific research on how users
+            interact with “StatsBot” and which kinds of queries they make (for further information, see
+            <a href="https://osf.io/v8ydk/">https://osf.io/v8ydk/</a>). For this, your chat history will be pseudonymized, removing all personal
+            information attached to it, and stored on a password-protected local storage medium until end of
+            2025. You can request the deletion of your data until end of July 2025 by contacting the coordinating
+            team under daniel.reiter&#64;univie.ac.at. After this, your chat histories will be anonymized and added
+            to a dataset of anonymized students chat histories, which may be publicly shared (e.g., on OSF) in
+            accordance with open science practices. Your pseudonymized chat histories will be permanently
+            deleted in this process.
+          </p>
+
 
         </div>
 
         <br/>
-          <mat-checkbox formControlName="dsgvo_check">I agree to the above conditions and I confirm that I am a psychology master student or employee of the facutlty of Psychology. / Ich stimme den oben genannten Bedingungen zu und bestätige, dass ich Student*in im Masterstudium an der Fakultät für Psychologie oder Mitarbeiter*in bin.   </mat-checkbox>
+          <mat-checkbox formControlName="dsgvo_check">I agree to the above conditions and I confirm that I am a psychology student or employee of the facutlty of Psychology. / Ich stimme den oben genannten Bedingungen zu und bestätige, dass ich Student*in an der Fakultät für Psychologie oder Mitarbeiter*in bin.   </mat-checkbox>
           <br /><br />
 
           @if(!success){
