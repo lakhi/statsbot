@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path // .tool_response.filePath // empty' | { read -r f; case \"$f\" in */psy-lehrprojekt-backend-main/*.php) if [ -x ./psy-lehrprojekt-backend-main/vendor/bin/sail ] && docker ps --filter \"name=laravel.test\" --format \"{{.Names}}\" 2>/dev/null | grep -q .; then rel=\"${f#*psy-lehrprojekt-backend-main/}\"; (cd psy-lehrprojekt-backend-main && ./vendor/bin/sail exec -T laravel.test ./vendor/bin/pint \"$rel\") >/dev/null 2>&1; fi ;; esac; } 2>/dev/null || true"
+          }
+        ]
+      }
+    ]
+  }
+}

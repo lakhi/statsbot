@@ -1,0 +1,61 @@
+<main style="text-align: center; overflow-y: auto;">
+
+<div style="width: 100%;">
+  <mat-card appearance="outlined">
+    <mat-card-header>
+      <mat-card-title>
+        Registration form
+      </mat-card-title>
+    </mat-card-header>
+    <mat-card-content>
+
+
+      <div>
+
+        <form [formGroup]="registrierungForm" (ngSubmit)="onSubmit()">
+          <br /><br />
+
+          <!--
+          <mat-form-field appearance="outline">
+            <mat-label>matriculation number</mat-label>
+            <input matInput formControlName="matnr" required />
+            <mat-hint>8 digits, no letters</mat-hint>
+          </mat-form-field>
+          &nbsp;
+          <br /><br />
+
+          <mat-form-field appearance="outline">
+            <mat-label>course</mat-label>
+            <input matInput formControlName="lv" required />
+          </mat-form-field>
+          &nbsp;
+
+        -->
+
+          <div style="text-align: left">
+          <p>
+            The web service “StatsBot” stores first names, surnames, matriculation numbers, chat histories, and a number of tokens used in a web database of the Vienna University Computer Center (ZID). The storage of this data is necessary to allow student to access their own chat histories from the past. In addition, chat histories are exported and analyzed for scientific purposes without personal reference (anonymized). The anonymized data will be retained for a minimum of 5 years. The anonymized dataset may be publicly shared in accordance with open science practices. Participants can request the deletion of their data within three months after their usage of StatsBot, by contacting the coordinator, who is listed in the StatsBot guidebook. The <a href="https://zid.univie.ac.at/en/azure/data-protection-and-data-security" target="_blank"> data protection regulations</a> of the University of Vienna for Microsoft Azure Cloud Services apply to the generation of StatsBot responses. It should be noted that the StatsBot does not transfer any personal data to cloud services, the data centers of the services are located within the EU.
+         </p>
+
+        </div>
+
+        <br/>
+          <mat-checkbox formControlName="dsgvo_check">I agree to the above conditions and I confirm that I am a psychology master student or employee of the facutlty of Psychology. / Ich stimme den oben genannten Bedingungen zu und bestätige, dass ich Student*in im Masterstudium an der Fakultät für Psychologie oder Mitarbeiter*in bin.   </mat-checkbox>
+          <br /><br />
+
+          @if(!success){
+            <button style="margin-bottom: 50px;" type="submit" mat-raised-button
+            [disabled]="!this.registrierungForm.valid">Register
+            </button>
+          }
+
+
+        </form>
+      </div>
+
+    </mat-card-content>
+
+  </mat-card>
+  <div style="width: 100%; text-align: center;"><small>©Department of Cognition, Emotion, and Methods in Psychology, Faculty of Psychology</small></div>
+</div>
+</main>

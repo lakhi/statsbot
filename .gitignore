@@ -1,0 +1,31 @@
+.DS_Store
+
+# Backend (Laravel)
+psy-lehrprojekt-backend-main/vendor/
+psy-lehrprojekt-backend-main/node_modules/
+psy-lehrprojekt-backend-main/public/build/
+psy-lehrprojekt-backend-main/public/hot
+psy-lehrprojekt-backend-main/storage/*.key
+psy-lehrprojekt-backend-main/storage/framework/cache/
+psy-lehrprojekt-backend-main/storage/framework/sessions/
+psy-lehrprojekt-backend-main/storage/framework/views/
+psy-lehrprojekt-backend-main/storage/logs/
+psy-lehrprojekt-backend-main/.env
+psy-lehrprojekt-backend-main/.env.backup
+psy-lehrprojekt-backend-main/.phpunit.result.cache
+psy-lehrprojekt-backend-main/Homestead.json
+psy-lehrprojekt-backend-main/Homestead.yaml
+psy-lehrprojekt-backend-main/auth.json
+psy-lehrprojekt-backend-main/database/*.sqlite
+psy-lehrprojekt-backend-main/database/*.sqlite-journal
+
+# Frontend (Angular)
+psy-lehrprojekt-frontend-client-main/node_modules/
+psy-lehrprojekt-frontend-client-main/dist/
+psy-lehrprojekt-frontend-client-main/.angular/
+psy-lehrprojekt-frontend-client-main/coverage/
+psy-lehrprojekt-frontend-client-main/.env
+
+# Claude
+CLAUDE.local.md
+.claude/settings.local.json

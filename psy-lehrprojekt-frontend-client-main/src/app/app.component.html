@@ -1,0 +1,51 @@
+<div id="wrapper">
+<header class="header">
+
+
+
+      <div class="header-element"><img class="logo" src="logo.jpg" alt="logo uni vienna"></div>
+
+      <div class="header-element" style="text-align: center;">
+        <img class="logo2" src="statbot_logo.jpg" alt="logo"/>
+
+      </div>
+          <div class="login header-element">
+            <mat-icon>account_circle</mat-icon>
+            <span>{{student().firstname}} {{student().lastname}}</span>
+          </div>
+
+</header>
+
+
+<!-- display registration form or chat interface  -->
+
+@if(ready() && !student().registered){
+  <app-register (registered)="registerComplete($event)"></app-register>
+}
+
+@if(ready() && student().registered && student().activated){
+  <app-chat [student]="student()"></app-chat>
+}
+
+@if(ready() && student().registered && !student().activated){
+
+  <mat-card class="register-form">
+
+  <mat-card-header>
+   <mat-card-title>
+    Your account has been deactivated.
+   </mat-card-title>
+  </mat-card-header>
+  <mat-card-content style="margin-top: 40px">
+    Please try again later.
+</mat-card-content>
+
+  </mat-card>
+
+
+}
+
+</div>
+
+
+

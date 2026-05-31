@@ -1,0 +1,95 @@
+<main>
+
+  <mat-progress-bar style="margin-top: 10px" [mode]="progressMode()?'indeterminate':'determinate'" [value]="tokenLeft()"></mat-progress-bar>
+
+  <div class="message-container">
+    <small [style.color]="student().token_left==0 || costs() > student().token_left?'red':''" >available credits: <br/> {{student().token_left}} of {{student().token_limit}}</small>
+
+    <small style="text-align: right">current topic costs: <br/>{{costs()}}</small>
+  </div>
+
+
+      <div class="button-container">
+        <button class="button" (click)="showHistory()" mat-raised-button><mat-icon>history</mat-icon>History</button>&nbsp;
+        <button class="button"(click)="newTopic()" mat-raised-button><mat-icon>edit_document</mat-icon>New topic</button>&nbsp;
+      </div>
+
+
+
+  <div #scroll class="scroll-container">
+
+@if(isHistoryShown){
+
+  <p>Click on the topic to load the chat:</p>
+
+  @if(history().length==0){
+
+    no history available
+
+  }
+
+
+  @for(history of history(); track history){
+
+    <mat-card (click)="loadThread(history.started)" class="message" style="cursor: pointer">
+      <mat-card-header>
+        {{history.created_at | date}}
+      </mat-card-header>
+      <mat-card-content>
+
+      <div>
+
+          {{history.sent}}...
+
+      </div>
+
+      </mat-card-content>
+    </mat-card>
+  }
+
+
+}
+@else{
+
+
+
+@for(msg of messages(); track msg){
+
+  <mat-card class="message" [style.background-color]="msg.role=='user'?'white': '#fdfbff'" [style.margin-left]="msg.role=='user'?'auto': '0'">
+    <mat-card-header>
+      @if(msg.role=="assistant"){ StatsBot }
+      @else{ <span style="margin-left: auto;">{{student().firstname }}</span> }
+    </mat-card-header>
+    <mat-card-content>
+
+    <div highlight-js [mode]="'default'" [options]="{}" style="white-space:pre-wrap;">
+
+        {{msg.content}}
+
+    </div>
+
+    </mat-card-content>
+  </mat-card>
+}
+
+}
+</div>
+
+
+<div class="send-container">
+
+      <mat-form-field appearance="outline">
+        <mat-label>Your message</mat-label>
+        <textarea id="newMsg" matInput name="newMsg" #newMsg [(ngModel)]="newMessage" (keydown.enter)="sendMessage()"></textarea>
+      </mat-form-field>
+
+       <button mat-fab extended [disabled]="newMsg.value=='' || student().token_left!<=0 ||costs() > student().token_left"(click)="sendMessage()">
+        <mat-icon>send</mat-icon>
+        Send
+      </button>
+
+      <br/><br/>
+</div>
+
+</main>
+
