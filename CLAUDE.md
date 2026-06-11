@@ -58,6 +58,7 @@ The initial lint run on this codebase surfaces real issues (unused vars, missing
 - Backend files live **outside** `public_html`; frontend build output goes **inside** `public_html`.
 - A `.htaccess` restricts access to UniVie students/employees; required Shibboleth attributes must be enabled in the webspace admin.
 - Frontend deploy = `npm run build` then transfer `dist/` contents to the webspace.
+- **The webspace is a containerized OpenShift deployment** (PHP 8.2 image, files on a PVC). The OpenShift API (`:6443`) and the SFTP gateway home are **not reachable** for direct push, so deploys are **pull-based**: publish the build to a GitHub release, then the pod pulls + applies it. Use the **`deploy-frontend` skill** (`.claude/skills/deploy-frontend/SKILL.md`) — it runs `scripts/publish-frontend.sh` and hands you the one-line paste for the pod Terminal. In-pod apply/rollback logic lives in `scripts/webspace-deploy.sh` + `scripts/webspace-rollback.sh` (copied once to `/var/www/`). Docroot is `/var/www/html`; namespace `lehrprojeg67`.
 
 ## Conventions
 
