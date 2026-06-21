@@ -88,14 +88,25 @@ Route::post('/messages', function (Request $request) {
     }
 
     //get answer from GPT model
+    $payload = [
+        'model' => env('AZURE_MODEL', 'no_endpoint_available'),
+        'messages' => $messages,
+    ];
+
+    //reasoning models (e.g. gpt-5-mini) reject a custom temperature and use reasoning_effort instead;
+    //chat-tuned models (e.g. gpt-4o) use temperature. Switch via .env so the model can be changed
+    //without code edits - leave AZURE_REASONING_EFFORT empty to fall back to a chat model.
+    $reasoningEffort = env('AZURE_REASONING_EFFORT');
+    if (! empty($reasoningEffort)) {
+        $payload['reasoning_effort'] = $reasoningEffort; // minimal | low | medium | high
+    } else {
+        $payload['temperature'] = 0.7;
+    }
+
     $gptResponse = Http::withHeaders([
         'Content-Type' => 'application/json',
-        'api-key' => env('AZURE_API_KEY', 'no_key_available') 
-        ])->post(env('AZURE_ENDPOINT', 'no_endpoint_available')."/openai/deployments/".env('AZURE_DEPLOYMENT', 'no_deployment_available')."/chat/completions?api-version=".env('AZURE_API_VERSION', 'no_api_version_available'), [
-            'model' => env('AZURE_MODEL', 'no_endpoint_available'),
-            'messages' => $messages, 
-            'temperature' => 0.7
-        ]);
+        'api-key' => env('AZURE_API_KEY', 'no_key_available')
+        ])->post(env('AZURE_ENDPOINT', 'no_endpoint_available')."/openai/deployments/".env('AZURE_DEPLOYMENT', 'no_deployment_available')."/chat/completions?api-version=".env('AZURE_API_VERSION', 'no_api_version_available'), $payload);
        
 
     $responseMessage = $gptResponse["choices"][0]["message"]["content"];
