@@ -1,0 +1,88 @@
+{
+  "_comment": [
+    "Retrieval gold set for hyptest.pdf. Questions are written in the register students",
+    "actually use — lowercase, imprecise, sometimes asking for the thing by description",
+    "rather than by name — because that is what the retriever will see in production.",
+    "",
+    "'expect' lists EVERY chunk that would be an acceptable top hit. Several questions",
+    "have more than one defensible answer (the 2x2 table and the Type I Error section",
+    "both answer 'what is a type I error'), and scoring them as single-answer would",
+    "punish correct behaviour.",
+    "",
+    "'expect': [] marks a NEGATIVE — the document does not contain the answer. Its title",
+    "promises Analysis of Variance but the notes end at Cohen's d, so ANOVA questions are",
+    "free, honest negatives. They measure the behaviour that matters most in a grounded",
+    "tutor: saying the material does not cover something instead of inventing it.",
+    "",
+    "'lang': de questions probe cross-lingual retrieval against English source."
+  ],
+
+  "doc_id": "hyptest",
+  "questions": [
+    { "id": "q01", "lang": "en", "q": "what does the p-value actually mean?",
+      "expect": ["hyptest-003"] },
+
+    { "id": "q02", "lang": "en", "q": "when do I reject the null hypothesis?",
+      "expect": ["hyptest-003"] },
+
+    { "id": "q03", "lang": "en", "q": "what's the difference between a type I and a type II error?",
+      "expect": ["hyptest-008", "hyptest-009", "hyptest-010"] },
+
+    { "id": "q04", "lang": "en", "q": "if I reject H0 but it was actually true, what kind of mistake is that?",
+      "expect": ["hyptest-009", "hyptest-008"] },
+
+    { "id": "q05", "lang": "en", "q": "how is statistical power defined?",
+      "expect": ["hyptest-011"] },
+
+    { "id": "q06", "lang": "en", "q": "what makes a test more likely to detect a real effect?",
+      "expect": ["hyptest-011"] },
+
+    { "id": "q07", "lang": "en", "q": "what is Cohen's d and how do you compute it?",
+      "expect": ["hyptest-012"] },
+
+    { "id": "q08", "lang": "en", "q": "how does a permutation test work, roughly?",
+      "expect": ["hyptest-005", "hyptest-006"] },
+
+    { "id": "q09", "lang": "en", "q": "how many times should I shuffle the labels?",
+      "expect": ["hyptest-006"] },
+
+    { "id": "q10", "lang": "en", "q": "what is a null distribution?",
+      "expect": ["hyptest-004"] },
+
+    { "id": "q11", "lang": "en", "q": "which tests give you the null distribution analytically?",
+      "expect": ["hyptest-004"] },
+
+    { "id": "q12", "lang": "en", "q": "what is a test statistic?",
+      "expect": ["hyptest-000"] },
+
+    { "id": "q13", "lang": "en", "q": "why can't we just work out the probability that the null hypothesis is true?",
+      "expect": ["hyptest-001"] },
+
+    { "id": "q14", "lang": "en", "q": "how are p-values distributed if the null hypothesis holds?",
+      "expect": ["hyptest-007"] },
+
+    { "id": "q15", "lang": "de", "q": "Was bedeutet der p-Wert genau?",
+      "expect": ["hyptest-003"] },
+
+    { "id": "q16", "lang": "de", "q": "Was ist ein Fehler erster Art?",
+      "expect": ["hyptest-009", "hyptest-008"] },
+
+    { "id": "q17", "lang": "de", "q": "Wie ist die Teststärke definiert?",
+      "expect": ["hyptest-011"] },
+
+    { "id": "q18", "lang": "de", "q": "Wie funktioniert ein Permutationstest?",
+      "expect": ["hyptest-005", "hyptest-006"] },
+
+    { "id": "n01", "lang": "en", "q": "how do I compute the F-ratio in a one-way ANOVA?",
+      "expect": [], "why_negative": "The notes contain no ANOVA content despite the title." },
+
+    { "id": "n02", "lang": "en", "q": "what's the difference between between-group and within-group variance?",
+      "expect": [], "why_negative": "Variance decomposition is never introduced." },
+
+    { "id": "n03", "lang": "en", "q": "explain the sum of squares decomposition",
+      "expect": [], "why_negative": "Not covered; F-test is named once as an example but never developed." },
+
+    { "id": "n04", "lang": "en", "q": "how do I run a post-hoc Tukey test after ANOVA?",
+      "expect": [], "why_negative": "Entirely outside the document." }
+  ]
+}

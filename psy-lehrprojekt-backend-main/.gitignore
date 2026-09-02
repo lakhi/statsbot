@@ -18,3 +18,7 @@ yarn-error.log
 /.fleet
 /.idea
 /.vscode
+
+# Offline KB build tools (Python)
+/tools/kb/__pycache__
+/.venv-kb
