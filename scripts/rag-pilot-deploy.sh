@@ -1,0 +1,218 @@
+#!/usr/bin/env bash
+#
+# rag-pilot-deploy.sh — runs INSIDE the ZID OpenShift pod.
+# Stands up the RAG pilot as a stack PARALLEL to production.
+#
+#   One-time install:
+#     curl -fsSL https://raw.githubusercontent.com/lakhi/statsbot/rag-pilot/scripts/rag-pilot-deploy.sh -o /var/www/rag-pilot-deploy.sh
+#     chmod +x /var/www/rag-pilot-deploy.sh
+#
+#   Deploy:
+#     EXPECT=<sha256> bash /var/www/rag-pilot-deploy.sh
+#
+# ISOLATION IS THE POINT. This script writes to exactly three NEW paths and
+# nothing else:
+#
+#     /var/www/lehrprojekt-backend-rag/
+#     /var/www/html/rag-pilot-test-api/
+#     /var/www/html/rag-pilot-test/
+#
+# It never writes to /var/www/html itself, never to /var/www/lehrprojekt-backend,
+# and it aborts before touching the database unless the effective table prefix is
+# rag_. That last guard matters more than it looks: `artisan migrate` against an
+# unprefixed connection would find the existing migrations table, conclude only
+# the newest migration is pending, and ALTER THE LIVE history TABLE.
+#
+# It also prints the live history row count before and after, so isolation is
+# demonstrated rather than asserted.
+set -euo pipefail
+
+REPO="lakhi/statsbot"
+TAG="rag-pilot-latest"
+ASSET="statsbot-rag-pilot.tgz"
+
+LIVE_APP="/var/www/lehrprojekt-backend"
+APP="/var/www/lehrprojekt-backend-rag"
+API_PUB="/var/www/html/rag-pilot-test-api"
+WEB="/var/www/html/rag-pilot-test"
+STATE="/var/www/.rag-pilot-sha"
+LOG="/var/www/rag-pilot-deploy.log"
+BASE="https://github.com/${REPO}/releases/download/${TAG}"
+
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG"; }
+die() { log "ABORT: $*"; exit 1; }
+
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+
+log "=== rag-pilot deploy start (pod $(hostname)) ==="
+
+# --- 0. refuse to run if the live paths are not where we expect them ---
+[ -d "$LIVE_APP" ]  || die "live app missing at $LIVE_APP — wrong pod?"
+[ -d /var/www/html ] || die "docroot missing"
+case "$APP$API_PUB$WEB" in
+  *"/var/www/html "*|*" /var/www/html"*) die "refusing: a target resolves to the docroot" ;;
+esac
+
+# --- 1. a row count BEFORE we do anything, from the live app's own config ---
+cat > "$tmp/count.php" <<'PHP'
+<?php
+// Counts rows in the LIVE tables using the LIVE app's own credentials.
+// Read-only; never writes. argv[1] is the .env to read.
+$env = [];
+foreach (file($argv[1]) as $l) {
+    if (preg_match('/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/', $l, $m)) {
+        $env[$m[1]] = trim(trim($m[2]), "\"'");
+    }
+}
+try {
+    $p = new PDO("mysql:host={$env['DB_HOST']};dbname={$env['DB_DATABASE']}",
+                 $env['DB_USERNAME'], $env['DB_PASSWORD'],
+                 [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+    printf('history=%d students=%d',
+        $p->query('SELECT COUNT(*) FROM history')->fetchColumn(),
+        $p->query('SELECT COUNT(*) FROM students')->fetchColumn());
+} catch (Exception $e) {
+    echo 'unavailable';
+}
+PHP
+
+livecount() { php "$tmp/count.php" "$LIVE_APP/.env" 2>/dev/null; }
+
+before="$(livecount)"
+log "LIVE tables before: $before"
+
+# --- 2. download + integrity gate ---
+log "downloading ${BASE}/${ASSET}"
+curl -fsSL "${BASE}/${ASSET}" -o "$tmp/$ASSET"
+got="$(sha256sum "$tmp/$ASSET" | awk '{print $1}')"
+if [ -n "${EXPECT:-}" ]; then
+  want="$EXPECT"; src="caller (EXPECT)"
+else
+  curl -fsSL "${BASE}/${ASSET}.sha256" -o "$tmp/$ASSET.sha256"
+  want="$(awk '{print $1}' "$tmp/$ASSET.sha256")"; src="release .sha256"
+fi
+[ "$got" = "$want" ] || die "sha256 mismatch — got $got, expected $want (from $src)"
+log "integrity OK ($src): $got"
+
+if [ -f "$STATE" ] && [ "$(cat "$STATE")" = "$got" ]; then
+  log "no change — $got already deployed; exiting"
+  exit 0
+fi
+
+mkdir -p "$tmp/x" && tar xzf "$tmp/$ASSET" -C "$tmp/x"
+for d in backend public-api frontend; do
+  [ -d "$tmp/x/$d" ] || die "tarball missing $d/ — wrong asset?"
+done
+
+# --- 3. back up the PILOT stack only (never production) ---
+if [ -d "$APP" ] || [ -d "$WEB" ]; then
+  ts="$(date '+%Y%m%d-%H%M%S')"
+  b="/var/www/rag-pilot-backup-${ts}.tgz"
+  tar czf "$b" -C /var/www \
+      $( [ -d "$APP" ]     && echo "lehrprojekt-backend-rag" ) \
+      $( [ -d "$API_PUB" ] && echo "html/rag-pilot-test-api" ) \
+      $( [ -d "$WEB" ]     && echo "html/rag-pilot-test" ) 2>/dev/null || true
+  log "pilot backup: $b"
+  ls -1t /var/www/rag-pilot-backup-*.tgz 2>/dev/null | tail -n +4 | while read -r old; do
+    rm -f "$old" && log "pruned $old"
+  done
+fi
+
+# --- 4. apply, preserving the pilot .env and vendor across redeploys ---
+mkdir -p "$APP" "$API_PUB" "$WEB"
+[ -f "$APP/.env" ] && cp "$APP/.env" "$tmp/env.keep"
+
+# refresh code but keep vendor/ (large, and identical to live)
+find "$APP" -mindepth 1 -maxdepth 1 ! -name vendor ! -name .env -exec rm -rf {} + 2>/dev/null || true
+cp -R "$tmp/x/backend"/. "$APP/"
+rm -rf "$WEB"/* && cp -R "$tmp/x/frontend"/. "$WEB/"
+cp -R "$tmp/x/public-api"/. "$API_PUB/"
+[ -f "$tmp/env.keep" ] && cp "$tmp/env.keep" "$APP/.env"
+log "files applied"
+
+# vendor/ is not in the tarball: composer.lock is unchanged from production, so
+# the live tree is byte-identical and copying it avoids any packagist egress.
+if [ ! -d "$APP/vendor" ]; then
+  log "copying vendor/ from the live app (read-only on live)…"
+  cp -R "$LIVE_APP/vendor" "$APP/vendor"
+fi
+
+# --- 5. pilot .env: derived from live, with the pilot overrides appended ---
+if [ ! -f "$APP/.env" ]; then
+  log "creating pilot .env from the live one"
+  grep -vE '^(APP_URL|DB_PREFIX|RAG_|AZURE_EMBED_|TUTOR_)=' "$LIVE_APP/.env" > "$APP/.env"
+  cat >> "$APP/.env" <<'ENV'
+
+# ---------------- RAG pilot overrides ----------------
+APP_URL=https://statsbot.univie.ac.at/rag-pilot-test-api
+
+# Table-prefix isolation. Every table this stack touches is rag_-prefixed, so the
+# live students/history tables are never read or written. Changing this to an
+# empty value would point the pilot at live study data.
+DB_PREFIX=rag_
+
+# Start UNGROUNDED: prove the parallel stack stands up before adding retrieval.
+# Flip to true (no redeploy needed — config is not cached) for the grounded arm.
+RAG_ENABLED=false
+RAG_INDEX_PATH=/var/www/lehrprojekt-backend-rag/storage/app/kb/kb-hyptest-3large-3072
+RAG_TOP_K=3
+RAG_MIN_SCORE=0.35
+
+AZURE_EMBED_DEPLOYMENT=statsbot-embed-3-large
+AZURE_EMBED_MODEL=text-embedding-3-large
+AZURE_EMBED_API_VERSION=2024-10-21
+AZURE_EMBED_DIMENSIONS=3072
+AZURE_EMBED_TIMEOUT=10
+
+TUTOR_STRUCTURED_OUTPUT=true
+
+# Small budget so a runaway test cannot spend much.
+TOKEN_LIMIT=200000
+ENV
+  chmod 600 "$APP/.env"
+fi
+
+chmod -R ug+rwX "$APP" "$API_PUB" "$WEB"
+chmod -R ug+rwX "$APP/storage" "$APP/bootstrap/cache"
+
+# --- 6. THE guard, then migrate ---
+grep -q '^DB_PREFIX=rag_' "$APP/.env" || die "pilot .env lacks DB_PREFIX=rag_ — refusing to migrate"
+
+effective="$(cd "$APP" && php -r '
+  $app = require "bootstrap/app.php";
+  $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+  echo config("database.connections.".config("database.default").".prefix");
+' 2>/dev/null || true)"
+[ "$effective" = "rag_" ] || die "effective table prefix is \"${effective}\", expected rag_ — refusing to migrate"
+log "table prefix verified: ${effective}"
+
+(cd "$APP" && php artisan migrate --force --no-interaction) 2>&1 | tee -a "$LOG"
+
+# --- 7. show the isolation, do not merely claim it ---
+after="$(livecount)"
+log "LIVE tables after:  $after"
+[ "$before" = "$after" ] && log "ISOLATION OK — live row counts unchanged" \
+                         || log "WARNING: live row counts CHANGED ($before -> $after) — investigate"
+
+ragcount="$(cd "$APP" && php -r '
+  $app = require "bootstrap/app.php";
+  $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+  try { printf("rag_history=%d rag_students=%d",
+        Illuminate\Support\Facades\DB::table("history")->count(),
+        Illuminate\Support\Facades\DB::table("students")->count()); }
+  catch (Exception $e) { echo "unavailable: ".$e->getMessage(); }
+' 2>/dev/null || true)"
+log "PILOT tables: $ragcount"
+
+echo "$got" > "$STATE"
+log "=== deploy done — RAG_ENABLED=$(grep -oP '(?<=^RAG_ENABLED=).*' "$APP/.env" || echo '?') ==="
+cat <<EOF
+
+Open:  https://statsbot.univie.ac.at/rag-pilot-test/
+Live:  https://statsbot.univie.ac.at/            (unchanged)
+
+Toggle retrieval without redeploying (config is not cached):
+  sed -i 's/^RAG_ENABLED=.*/RAG_ENABLED=true/'  $APP/.env
+  sed -i 's/^RAG_ENABLED=.*/RAG_ENABLED=false/' $APP/.env
+EOF

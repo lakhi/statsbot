@@ -58,6 +58,28 @@
                   "with": "src/environments/environment.development.ts"
                 }
               ]
+            },
+            "rag-pilot": {
+              "outputHashing": "all",
+              "baseHref": "/rag-pilot-test/",
+              "budgets": [
+                {
+                  "type": "initial",
+                  "maximumWarning": "500kB",
+                  "maximumError": "1MB"
+                },
+                {
+                  "type": "anyComponentStyle",
+                  "maximumWarning": "2kB",
+                  "maximumError": "4kB"
+                }
+              ],
+              "fileReplacements": [
+                {
+                  "replace": "src/environments/environment.ts",
+                  "with": "src/environments/environment.ragpilot.ts"
+                }
+              ]
             }
           },
           "defaultConfiguration": "production"
