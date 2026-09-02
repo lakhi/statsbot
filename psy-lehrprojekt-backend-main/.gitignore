@@ -22,3 +22,10 @@ yarn-error.log
 # Offline KB build tools (Python)
 /tools/kb/__pycache__
 /.venv-kb
+
+# Course-material corpus. THIS REPO IS PUBLIC — source documents and anything
+# derived from them that carries their text must never be committed. Whitelist,
+# not blacklist, so a new corpus file is ignored by default rather than by luck.
+# gold-questions.json is exempt: the questions are ours, and it quotes no source text.
+/resources/kb/*
+!/resources/kb/gold-questions.json

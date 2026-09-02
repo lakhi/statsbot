@@ -7,8 +7,18 @@
 #     curl -fsSL https://raw.githubusercontent.com/lakhi/statsbot/rag-pilot/scripts/rag-pilot-deploy.sh -o /var/www/rag-pilot-deploy.sh
 #     chmod +x /var/www/rag-pilot-deploy.sh
 #
-#   Deploy:
+#   Deploy (code only — runs ungrounded):
 #     EXPECT=<sha256> bash /var/www/rag-pilot-deploy.sh
+#
+#   Deploy with the course-material index:
+#     EXPECT=<sha256> CORPUS_URL='<private url>' CORPUS_EXPECT=<sha256> \
+#       bash /var/www/rag-pilot-deploy.sh
+#
+# The index is NOT in the public release: it embeds the lecture notes verbatim and
+# lakhi/statsbot is a public repo. It is fetched from a URL you control (a u:cloud
+# share keeps it on University infrastructure and needs no token; add CORPUS_TOKEN
+# if yours needs an Authorization header). It persists across redeploys, so the
+# URL is only needed when the corpus itself changes.
 #
 # ISOLATION IS THE POINT. This script writes to exactly three NEW paths and
 # nothing else:
@@ -122,6 +132,8 @@ fi
 # --- 4. apply, preserving the pilot .env and vendor across redeploys ---
 mkdir -p "$APP" "$API_PUB" "$WEB"
 [ -f "$APP/.env" ] && cp "$APP/.env" "$tmp/env.keep"
+# the corpus lives under storage/, which the refresh below wipes
+[ -d "$APP/storage/app/kb" ] && cp -R "$APP/storage/app/kb" "$tmp/kb.keep"
 
 # refresh code but keep vendor/ (large, and identical to live)
 find "$APP" -mindepth 1 -maxdepth 1 ! -name vendor ! -name .env -exec rm -rf {} + 2>/dev/null || true
@@ -129,6 +141,7 @@ cp -R "$tmp/x/backend"/. "$APP/"
 rm -rf "$WEB"/* && cp -R "$tmp/x/frontend"/. "$WEB/"
 cp -R "$tmp/x/public-api"/. "$API_PUB/"
 [ -f "$tmp/env.keep" ] && cp "$tmp/env.keep" "$APP/.env"
+[ -d "$tmp/kb.keep" ] && mkdir -p "$APP/storage/app" && cp -R "$tmp/kb.keep" "$APP/storage/app/kb"
 log "files applied"
 
 # vendor/ is not in the tarball: composer.lock is unchanged from production, so
@@ -136,6 +149,33 @@ log "files applied"
 if [ ! -d "$APP/vendor" ]; then
   log "copying vendor/ from the live app (read-only on live)…"
   cp -R "$LIVE_APP/vendor" "$APP/vendor"
+fi
+
+# --- 4b. corpus: fetched separately, from a URL you control ---
+IDX="$APP/storage/app/kb"
+if [ -n "${CORPUS_URL:-}" ]; then
+  log "fetching corpus bundle"
+  if [ -n "${CORPUS_TOKEN:-}" ]; then
+    curl -fsSL -H "Authorization: Bearer ${CORPUS_TOKEN}" "$CORPUS_URL" -o "$tmp/corpus.tgz"
+  else
+    curl -fsSL "$CORPUS_URL" -o "$tmp/corpus.tgz"
+  fi
+  cgot="$(sha256sum "$tmp/corpus.tgz" | awk '{print $1}')"
+  if [ -n "${CORPUS_EXPECT:-}" ]; then
+    [ "$cgot" = "$CORPUS_EXPECT" ] || die "corpus sha256 mismatch — got $cgot, expected $CORPUS_EXPECT"
+    log "corpus integrity OK: $cgot"
+  else
+    log "WARNING: no CORPUS_EXPECT supplied — corpus not integrity-checked (got $cgot)"
+  fi
+  mkdir -p "$IDX"
+  tar xzf "$tmp/corpus.tgz" -C "$IDX"
+  log "corpus installed: $(ls "$IDX" 2>/dev/null | tr '\n' ' ')"
+elif [ -f "$IDX/kb-hyptest-3large-3072.f32" ]; then
+  log "corpus already present from an earlier deploy; not re-fetching"
+else
+  log "NOTE: no corpus on the pod and no CORPUS_URL given."
+  log "      The stack will still serve, but retrieval degrades to ungrounded answers"
+  log "      even if RAG_ENABLED=true. Re-run with CORPUS_URL to add it."
 fi
 
 # --- 5. pilot .env: derived from live, with the pilot overrides appended ---
@@ -211,6 +251,8 @@ cat <<EOF
 
 Open:  https://statsbot.univie.ac.at/rag-pilot-test/
 Live:  https://statsbot.univie.ac.at/            (unchanged)
+
+Corpus on the pod: $(ls "$APP/storage/app/kb" 2>/dev/null | tr '\n' ' ' || echo 'NONE')
 
 Toggle retrieval without redeploying (config is not cached):
   sed -i 's/^RAG_ENABLED=.*/RAG_ENABLED=true/'  $APP/.env
