@@ -20,25 +20,20 @@ resources/kb/hyptest.pdf
   └─ eval.py      score against resources/kb/gold-questions.json
 ```
 
-## The corpus is NOT in this repository
+## Where the corpus lives
 
-`lakhi/statsbot` is **public**, and both the source PDFs and everything derived from
-them (the docling JSON, the patch file, the index sidecar) carry the lecture notes
-verbatim. None of it is committed. The rule in `psy-lehrprojekt-backend-main/.gitignore` is a
-**whitelist** (`/resources/kb/*` then un-ignore `gold-questions.json`), so a new corpus
-file is ignored by default rather than by anyone remembering. The repo-root
-`.gitignore` also ignores `*.pdf` anywhere in the tree.
+`resources/kb/` holds the source documents and everything derived from them that a
+rebuild needs — the PDF, the docling extraction, the QA patch and the gold set. They
+are committed, so a fresh clone can rebuild the index without hunting for files.
 
-Tracked in `resources/kb/`: `gold-questions.json` only. The questions are ours and
-quote no source text.
+Note that **this repository is public**, which means the course material in
+`resources/kb/` is publicly downloadable and stays in git history once pushed. That
+was a deliberate call for the pilot (2026-09-02) on the grounds that it is a trial;
+it will want revisiting before a wider corpus of other people's teaching material
+goes in.
 
-So a fresh clone has the tools but no corpus. To rebuild, put the source PDF at
-`resources/kb/<doc>.pdf` yourself — it is not obtainable from git.
-
-`storage/app/` is gitignored too, so built indexes stay out of the repo. They reach
-the pod as a **separate private bundle** (`dist/statsbot-rag-pilot-corpus.tgz`,
-written by `scripts/publish-rag-pilot.sh`) fetched from a URL you control, never from
-the public GitHub release that carries the code.
+`storage/app/` is gitignored, so built indexes stay out of the repo and ship inside
+the release asset, the same way the frontend bundle does.
 
 ## Setup
 

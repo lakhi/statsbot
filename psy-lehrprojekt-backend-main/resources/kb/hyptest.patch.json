@@ -1,0 +1,87 @@
+{
+  "_comment": [
+    "Human QA patch for hyptest.pdf, applied by tools/kb/chunk.py after the provenance",
+    "re-sort and before segmentation. Every edit a human made to docling's output lives",
+    "here, never in the generated chunks — so the build stays reproducible and each",
+    "correction is reviewable.",
+    "",
+    "Matching is CONTENT-ADDRESSED (match_prefix on normalised text), not index-based, so",
+    "the patch survives a docling re-run that renumbers items. chunk.py fails loudly if a",
+    "patch entry matches zero items or more than one.",
+    "",
+    "Source doc sha256: ef87c6f024af4891af17c788d3b29eb4380aec955cee899daaf8637f30addd3f"
+  ],
+
+  "source_sha256": "ef87c6f024af4891af17c788d3b29eb4380aec955cee899daaf8637f30addd3f",
+
+  "ops": [
+    {
+      "op": "relabel",
+      "why": "docling classified the standalone beta as a page footer. Dropping page_footer items would silently delete the Type II error rate — the one symbol the section exists to define.",
+      "match_prefix": "β.",
+      "expect_label": "page_footer",
+      "to_label": "formula",
+      "set_text": "\\beta ."
+    },
+    {
+      "op": "drop",
+      "why": "Stray combining not-equal glyph left over from typesetting H1: mu_X != mu_Y. The inequality is already correct inside the adjacent formula item.",
+      "match_prefix": "̸",
+      "expect_label": "text"
+    },
+    {
+      "op": "set_text",
+      "why": "Missing word space in docling's output.",
+      "match_prefix": "Asmall p-value",
+      "expect_label": "text",
+      "set_text": "A small p-value indicates that the observed result would be unlikely under the null hypothesis."
+    },
+    {
+      "op": "set_text",
+      "why": "CodeFormula emitted 'Type I error' as separate letters, which tokenises badly and reads as noise. Semantics unchanged.",
+      "match_prefix": "P ( T y p e I e r r o r )",
+      "expect_label": "formula",
+      "set_text": "P(\\text{Type I error}) = \\alpha ."
+    },
+    {
+      "op": "set_text",
+      "why": "Same letter-spacing artefact on 'Power'.",
+      "match_prefix": "P o w e r = 1 - \\beta",
+      "expect_label": "formula",
+      "set_text": "\\text{Power} = 1 - \\beta ."
+    },
+    {
+      "op": "set_text",
+      "why": "Third instance of the CodeFormula digit-spacing artefact: 'k = 1 0 \\, 0 0 0' does not read as ten thousand. Found by the gold-set eval — q09 ('how many times should I shuffle the labels?') retrieved the Permutation Tests intro instead of the Algorithm chunk that actually states the count.",
+      "match_prefix": "k = 1 0 \\, 0 0 0",
+      "expect_label": "formula",
+      "set_text": "k = 10\\,000 \\quad \\text{(ten thousand permutations)}"
+    },
+    {
+      "op": "set_text",
+      "why": "Mangled Unicode for mu-hat. These are the sample-mean estimators students search for by name.",
+      "match_prefix": "where ˆ µ X and ˆ µ Y",
+      "expect_label": "text",
+      "set_text": "where $\\hat{\\mu}_X$ and $\\hat{\\mu}_Y$ denote the sample means."
+    },
+    {
+      "op": "set_text",
+      "why": "Chi-square is a searchable term; 'χ 2 -test' does not match a query for 'chi-squared test'.",
+      "match_prefix": "χ 2 -test",
+      "expect_label": "list_item",
+      "set_text": "$\\chi^2$-test (chi-squared test),"
+    },
+    {
+      "op": "replace_table",
+      "why": "TableFormer collapsed the 2x2 decision table into a single data row: 'H 0 true H 0 false' | 'Correct Type II error' | 'Type I error Correct'. All four outcomes are present but the row mapping is destroyed, which would let the tutor state confidently that a Type I error occurs when H0 is false. Replaced with the source table.",
+      "match_table_index": 0,
+      "markdown": "|              | Accept $H_0$   | Reject $H_0$   |\n| ------------ | -------------- | -------------- |\n| $H_0$ true   | Correct        | Type I error   |\n| $H_0$ false  | Type II error  | Correct        |"
+    }
+  ],
+
+  "heading_hierarchy": {
+    "_comment": "docling emitted every section_header at level=1, so hierarchy must be derived. Numbered headings are top level; unnumbered ones nest under the most recent numbered heading.",
+    "rule": "numbered_top_level",
+    "numbered_pattern": "^\\d+\\s"
+  }
+}

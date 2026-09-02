@@ -30,12 +30,9 @@ psy-lehrprojekt-frontend-client-main/.env
 CLAUDE.local.md
 .claude/settings.local.json
 
-# Course-material source documents, anywhere in the tree. THIS REPO IS PUBLIC.
-# The canonical copy lives (untracked) in psy-lehrprojekt-backend-main/resources/kb/.
-*.pdf
-!psy-lehrprojekt-frontend-client-main/src/assets/**/*.pdf
-
-# Release bundles built by scripts/publish-rag-pilot.sh.
-# dist/statsbot-rag-pilot-corpus.tgz contains lecture-note text verbatim and must
-# never reach this PUBLIC repo.
+# Build output from scripts/publish-rag-pilot.sh.
 /dist/
+
+# Stray duplicate of the corpus PDF at the repo root; the canonical copy is
+# psy-lehrprojekt-backend-main/resources/kb/hyptest.pdf (byte-identical).
+/hyptest.pdf

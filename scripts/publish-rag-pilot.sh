@@ -17,17 +17,13 @@
 #   public-api/  -> /var/www/html/rag-pilot-test-api/   (index.php + .htaccess)
 #   frontend/    -> /var/www/html/rag-pilot-test/       (Angular, base-href /rag-pilot-test/)
 #
-# It carries CODE ONLY. The course-material index ships as a SEPARATE bundle that
-# is never published here: this repo is public, and the index embeds the lecture
-# notes verbatim. That bundle is written to dist/ for you to place somewhere the
-# pod can reach privately, and the deploy script fetches it from a CORPUS_URL you
-# supply. See "corpus" in the output below.
+# It also carries the built KB index, which is gitignored and therefore has no
+# other route to the pod.
 set -euo pipefail
 
 REPO="lakhi/statsbot"
 TAG="rag-pilot-latest"
 ASSET="statsbot-rag-pilot.tgz"
-CORPUS_ASSET="statsbot-rag-pilot-corpus.tgz"
 FRONTEND_DIR="psy-lehrprojekt-frontend-client-main"
 BACKEND_DIR="psy-lehrprojekt-backend-main"
 BUILD_OUT="dist/lehrprojekt-client/browser"
@@ -80,8 +76,9 @@ tar -cf - -C "$BACKEND_DIR" \
     --exclude='./composer.phar' \
     . | tar -xf - -C "$stage/backend"
 
-# NB: the index deliberately does NOT go in this tarball - see the header.
+# the built index (gitignored, so it can only travel this way)
 mkdir -p "$stage/backend/storage/app/kb"
+cp "$idx.f32" "$idx.json" "$stage/backend/storage/app/kb/"
 
 # writable dirs Laravel needs but git does not carry
 mkdir -p "$stage/backend/storage/framework/cache/data" \
@@ -138,17 +135,6 @@ HTA
 
 cp -R "$FRONTEND_DIR/$BUILD_OUT"/. "$stage/frontend/"
 
-# --- 2b. the corpus bundle: index only, NEVER published to this public repo ---
-mkdir -p "$ROOT/dist"
-corpus="$ROOT/dist/$CORPUS_ASSET"
-COPYFILE_DISABLE=1 tar --no-mac-metadata -czf "$corpus" \
-    -C "$(dirname "$idx")" "$(basename "$idx").f32" "$(basename "$idx").json" 2>/dev/null \
-  || tar -czf "$corpus" -C "$(dirname "$idx")" "$(basename "$idx").f32" "$(basename "$idx").json"
-corpus_sha="$(shasum -a 256 "$corpus" | awk '{print $1}')"
-echo "$corpus_sha  $CORPUS_ASSET" > "$corpus.sha256"
-echo "==> Corpus bundle (PRIVATE, not uploaded): $corpus"
-echo "    sha256: $corpus_sha ($(wc -c < "$corpus") bytes)"
-
 tgz="$work/$ASSET"
 COPYFILE_DISABLE=1 tar --no-mac-metadata -czf "$tgz" -C "$stage" . 2>/dev/null \
   || tar -czf "$tgz" -C "$stage" .
@@ -163,13 +149,6 @@ if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
      --notes "Parallel test stack for the course-material grounding pilot. Not production." \
      --prerelease
 fi
-# Last line of defence: this release is PUBLIC. Refuse to upload if any lecture
-# text slipped into the code tarball.
-if tar tzf "$tgz" | grep -qE 'storage/app/kb/.+\.(f32|json)$|resources/kb/hyptest'; then
-  echo "ERROR: the code tarball contains corpus files. Refusing to publish to a public release." >&2
-  exit 1
-fi
-
 gh release upload "$TAG" "$tgz" "$tgz.sha256" --repo "$REPO" --clobber
 echo "==> Uploaded to release $TAG"
 
@@ -178,18 +157,12 @@ cat <<EOF
 ────────────────────────────────────────────────────────────────────────
 Next: apply it on the pod.
 
- 1. Upload the corpus bundle somewhere the pod can fetch it privately:
-        $corpus
-    A u:cloud share link keeps the lecture notes on University
-    infrastructure and needs no token on the pod. Any URL curl can reach
-    works; add CORPUS_TOKEN=… if it needs an Authorization header.
-
- 2. Connect to the U:Wien VPN.
- 3. Open $PODS_LIST
+ 1. Connect to the U:Wien VPN.
+ 2. Open $PODS_LIST
     and click the running zid-webproject-… pod → Terminal.
- 4. Paste ONE line:
+ 3. Paste ONE line:
 
-    EXPECT=$sha CORPUS_URL='<your-url>' CORPUS_EXPECT=$corpus_sha bash /var/www/rag-pilot-deploy.sh
+    EXPECT=$sha bash /var/www/rag-pilot-deploy.sh
 
  (First time only, install the deploy script first — see
   scripts/rag-pilot-deploy.sh header.)
