@@ -1,0 +1,86 @@
+/* Two-layer answers.
+   The point of the treatment is provenance, not decoration: a student must be
+   able to tell at a glance which half of an answer carries the course's
+   authority. The materials layer therefore gets the UniVie blue rail and the
+   tutor's own explanation stays visually quieter. */
+
+.layer {
+  border-left: 3px solid transparent;
+  padding: 6px 0 6px 9px;
+  margin-bottom: 8px;
+}
+
+.layer:last-child {
+  margin-bottom: 0;
+}
+
+.layer-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: bold;
+  font-size: 0.95em;
+  margin-bottom: 4px;
+}
+
+.layer-label mat-icon {
+  font-size: 1.1em;
+  height: 1.1em;
+  width: 1.1em;
+}
+
+.layer-body {
+  white-space: pre-wrap;
+}
+
+/* Sourced from the course materials. */
+.layer-materials {
+  border-left-color: #0063a6;
+  background-color: #f2f7fb;
+}
+
+.layer-materials .layer-label {
+  color: #0063a6;
+}
+
+/* Nothing cleared the similarity floor: say so rather than leave a gap, so the
+   absence of a citation is never mistaken for course endorsement. */
+.layer-nomaterials {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-left-color: #b9b9b9;
+  color: #6b6b6b;
+  font-style: italic;
+}
+
+.layer-nomaterials mat-icon {
+  font-size: 1.1em;
+  height: 1.1em;
+  width: 1.1em;
+}
+
+/* The model's own knowledge. Deliberately plainer than the materials layer. */
+.layer-general {
+  border-left-color: #d8d8d8;
+}
+
+.layer-general .layer-label {
+  color: #555;
+}
+
+.sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.source-chip {
+  font-size: 0.9em;
+  color: #0063a6;
+  background-color: #e3edf6;
+  border-radius: 10px;
+  padding: 1px 8px;
+  white-space: nowrap;
+}

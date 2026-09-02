@@ -94,8 +94,9 @@ Route::post('/messages', function (Request $request) {
     //behaviour without moving a file - the pilot's rollback path on the pod.
     //search() returns [] on any failure, so a broken index degrades the tutor
     //rather than taking it offline.
+    $retriever = app(KbRetriever::class);
     $hits = config('tutor.rag_enabled')
-        ? app(KbRetriever::class)->search(end($messages)['content'] ?? '')
+        ? $retriever->search(end($messages)['content'] ?? '')
         : [];
 
     $payload = [
@@ -142,6 +143,15 @@ Route::post('/messages', function (Request $request) {
     $history->completion_tokens = $gptResponse["usage"]["completion_tokens"];
     $history->total_tokens = $gptResponse["usage"]["total_tokens"];
 
+    //which corpus answered this turn - see the add_retrieval_provenance migration.
+    //Rows before and after grounding goes live are otherwise indistinguishable,
+    //and that cannot be reconstructed after the fact.
+    $history->kb_version = config('tutor.rag_enabled') ? $retriever->version() : null;
+    $history->kb_chunks = $hits ? json_encode(array_map(
+        fn ($h) => ['id' => $h['id'], 'score' => $h['score']], $hits
+    )) : null;
+    $history->grounded = $answer['from_materials'] !== null;
+
 
     $history->save();
 
@@ -157,6 +167,10 @@ Route::post('/messages', function (Request $request) {
         'from_general' => $answer['from_general'],
         'sources' => $answer['sources'],
         'grounded' => $answer['from_materials'] !== null,
+        //sent rather than duplicated in the client, so the wording has one home
+        'materials_note' => $answer['from_materials'] === null
+            ? config('tutor.no_material_note')
+            : null,
         'token_left' => $student->token_left,
         'costs' =>  $history->total_tokens
     ]);

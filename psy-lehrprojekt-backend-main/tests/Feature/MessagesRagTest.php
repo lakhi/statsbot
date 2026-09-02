@@ -73,8 +73,6 @@ class MessagesRagTest extends TestCase
         $s->uid = 'u:test01';
         $s->firstname = 'Test';
         $s->lastname = 'Student';
-        $s->matnr = '01234567';
-        $s->lv = 'PSY-STATS';
         $s->token_limit = $tokens;
         $s->token_left = $tokens;
         $s->activated = true;
@@ -122,6 +120,13 @@ class MessagesRagTest extends TestCase
             ->assertJsonPath('sources.0.id', 'hyptest-003')
             ->assertJsonPath('sources.0.page_start', 2)
             ->assertJsonStructure(['content', 'from_materials', 'from_general', 'sources', 'token_left', 'costs']);
+
+        // which corpus answered must be recorded at write time - it cannot be
+        // reconstructed once the index is rebuilt
+        $row = History::first();
+        $this->assertSame(1, (int) $row->grounded);
+        $this->assertStringStartsWith('hyptest@', $row->kb_version);
+        $this->assertStringContainsString('hyptest-003', $row->kb_chunks);
     }
 
     public function test_history_sent_records_the_students_words_not_the_injected_context(): void

@@ -38,12 +38,18 @@ export class DataService {
 
     }
 
-    sendMessages(messages: Message[], started: number): Observable<any>{
+    sendMessages(messages: Message[], started: number): Observable<Answer>{
 
+      //drop the locally-generated tutor greeting: it is UI copy, never part of
+      //the dialogue the backend stores or sends on to the model
       let messagesToSend = [...messages];
       messagesToSend.shift();
 
-      return this.http.post<Answer>(this.url+"messages", {"messages": messagesToSend, "started": started}).pipe(
+      //only role + content go to the backend; the two-layer fields on assistant
+      //turns are display state and would fail the route's validation
+      const payload = messagesToSend.map(m => ({role: m.role, content: m.content}));
+
+      return this.http.post<Answer>(this.url+"messages", {"messages": payload, "started": started}).pipe(
         catchError(this.handleError)
       );
 
