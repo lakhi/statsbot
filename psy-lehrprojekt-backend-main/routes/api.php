@@ -8,6 +8,9 @@ use Illuminate\Support\Facades\Http;
 use App\Models\Student;
 use App\Models\History;
 
+use App\Services\KbRetriever;
+use App\Services\TutorPrompt;
+
 Route::get('/student', function(Request $request){
 
     return $request->student;
@@ -86,10 +89,27 @@ Route::post('/messages', function (Request $request) {
     }
 
 
+    //grounding: retrieve passages from the course materials for THIS turn.
+    //RAG_ENABLED=false skips retrieval entirely and restores the ungrounded
+    //behaviour without moving a file - the pilot's rollback path on the pod.
+    //search() returns [] on any failure, so a broken index degrades the tutor
+    //rather than taking it offline.
+    $hits = config('tutor.rag_enabled')
+        ? app(KbRetriever::class)->search(end($messages)['content'] ?? '')
+        : [];
+
     $payload = [
         'model' => env('AZURE_MODEL', 'no_endpoint_available'),
-        'messages' => $messages,
+        //system prompt first (stable prefix, so prompt caching survives),
+        //retrieved passages last, as their own message - never appended to the
+        //student's text, which is persisted verbatim to history.sent below.
+        'messages' => TutorPrompt::assemble($messages, $hits),
     ];
+
+    //the two answer layers are separated by parsing JSON, not by prose headings
+    if ($responseFormat = TutorPrompt::responseFormat()) {
+        $payload['response_format'] = $responseFormat;
+    }
 
     //reasoning models (e.g. gpt-5-mini) reject a custom temperature and use reasoning_effort instead;
     //chat-tuned models (e.g. gpt-4o) use temperature. Switch via .env so the model can be changed
@@ -106,8 +126,11 @@ Route::post('/messages', function (Request $request) {
         'api-key' => env('AZURE_API_KEY', 'no_key_available')
         ])->post(env('AZURE_ENDPOINT', 'no_endpoint_available')."/openai/deployments/".env('AZURE_DEPLOYMENT', 'no_deployment_available')."/chat/completions?api-version=".env('AZURE_API_VERSION', 'no_api_version_available'), $payload);
 
-    $responseMessage = $gptResponse["choices"][0]["message"]["content"];
+    $answer = TutorPrompt::parse($gptResponse["choices"][0]["message"]["content"] ?? null, $hits);
+    $responseMessage = $answer['content'];
 
+    //NOTE: $messages here is still the student's own conversation - assemble()
+    //worked on a copy - so history.sent stays exactly what the student typed.
     $lastSentMessage = end($messages);
 
     $history = new History();
@@ -127,7 +150,13 @@ Route::post('/messages', function (Request $request) {
     $student->save();
 
     return response()->json([
+        //'content' keeps the flattened two-layer text so an un-updated client
+        //still renders a complete answer; the split fields are additive.
         'content' =>  $history->received,
+        'from_materials' => $answer['from_materials'],
+        'from_general' => $answer['from_general'],
+        'sources' => $answer['sources'],
+        'grounded' => $answer['from_materials'] !== null,
         'token_left' => $student->token_left,
         'costs' =>  $history->total_tokens
     ]);
