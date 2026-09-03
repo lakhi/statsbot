@@ -179,11 +179,24 @@ chmod -R ug+rwX "$APP/storage" "$APP/bootstrap/cache"
 # --- 6. THE guard, then migrate ---
 grep -q '^DB_PREFIX=rag_' "$APP/.env" || die "pilot .env lacks DB_PREFIX=rag_ — refusing to migrate"
 
-effective="$(cd "$APP" && php -r '
+# bootstrap/app.php does NOT register the Composer autoloader — artisan requires
+# vendor/autoload.php itself, one line before it requires the bootstrap file. Booting
+# the framework by hand has to do the same, or this fatals and the empty output is
+# indistinguishable from a genuinely unprefixed connection.
+# Streams are kept apart so $effective is stdout only, but BOTH are shown when the
+# probe fails: depending on display_errors, PHP writes fatals to either one.
+if (cd "$APP" && php -r '
+  require "vendor/autoload.php";
   $app = require "bootstrap/app.php";
   $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
   echo config("database.connections.".config("database.default").".prefix");
-' 2>/dev/null || true)"
+' >"$tmp/prefix.out" 2>"$tmp/prefix.err"); then
+  effective="$(cat "$tmp/prefix.out")"
+else
+  log "prefix probe crashed:"
+  cat "$tmp/prefix.out" "$tmp/prefix.err" | sed 's/^/    /' | tee -a "$LOG"
+  die "could not resolve the effective table prefix — refusing to migrate"
+fi
 [ "$effective" = "rag_" ] || die "effective table prefix is \"${effective}\", expected rag_ — refusing to migrate"
 log "table prefix verified: ${effective}"
 
@@ -195,14 +208,19 @@ log "LIVE tables after:  $after"
 [ "$before" = "$after" ] && log "ISOLATION OK — live row counts unchanged" \
                          || log "WARNING: live row counts CHANGED ($before -> $after) — investigate"
 
-ragcount="$(cd "$APP" && php -r '
+if (cd "$APP" && php -r '
+  require "vendor/autoload.php";
   $app = require "bootstrap/app.php";
   $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
   try { printf("rag_history=%d rag_students=%d",
         Illuminate\Support\Facades\DB::table("history")->count(),
         Illuminate\Support\Facades\DB::table("students")->count()); }
   catch (Exception $e) { echo "unavailable: ".$e->getMessage(); }
-' 2>/dev/null || true)"
+' >"$tmp/rag.out" 2>"$tmp/rag.err"); then
+  ragcount="$(cat "$tmp/rag.out")"
+else
+  ragcount="probe failed: $(cat "$tmp/rag.out" "$tmp/rag.err" | tr '\n' ' ' | cut -c1-300)"
+fi
 log "PILOT tables: $ragcount"
 
 echo "$got" > "$STATE"
