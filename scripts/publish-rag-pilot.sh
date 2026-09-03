@@ -62,7 +62,12 @@ trap 'rm -rf "$work"' EXIT
 stage="$work/stage"
 mkdir -p "$stage/backend" "$stage/public-api" "$stage/frontend"
 
-# backend app, minus everything the pod supplies or must not receive
+# backend app, minus everything the pod supplies or must not receive.
+# bootstrap/cache/*.php matters more than it looks: it is Laravel's package-discovery
+# manifest, it is gitignored (so it never shows in git status), and this tar reads the
+# WORKING TREE, not git. A manifest built here lists dev providers such as Collision;
+# the pod's vendor/ is installed --no-dev, so registering them fatals on boot. Ship no
+# manifest and Laravel rebuilds a correct one from the pod's own installed.json.
 tar -cf - -C "$BACKEND_DIR" \
     --exclude='./vendor' \
     --exclude='./node_modules' \
@@ -74,6 +79,8 @@ tar -cf - -C "$BACKEND_DIR" \
     --exclude='./storage/framework/views/*' \
     --exclude='./tools/kb/__pycache__' \
     --exclude='./composer.phar' \
+    --exclude='./.phpunit.result.cache' \
+    --exclude='./bootstrap/cache/*.php' \
     . | tar -xf - -C "$stage/backend"
 
 # the built index (gitignored, so it can only travel this way)

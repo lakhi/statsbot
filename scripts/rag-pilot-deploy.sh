@@ -129,7 +129,13 @@ cp -R "$tmp/x/backend"/. "$APP/"
 rm -rf "$WEB"/* && cp -R "$tmp/x/frontend"/. "$WEB/"
 cp -R "$tmp/x/public-api"/. "$API_PUB/"
 [ -f "$tmp/env.keep" ] && cp "$tmp/env.keep" "$APP/.env"
-log "files applied"
+
+# Discard any package-discovery manifest that travelled in the tarball. It is built
+# against whatever vendor/ existed on the machine that packaged it — typically with
+# dev dependencies — while this pod's vendor/ is --no-dev. Laravel rebuilds it on the
+# next boot from the pod's own vendor/composer/installed.json.
+rm -f "$APP/bootstrap/cache/"*.php
+log "files applied (package manifest cleared for local rediscovery)"
 
 # vendor/ is not in the tarball: composer.lock is unchanged from production, so
 # the live tree is byte-identical and copying it avoids any packagist egress.
