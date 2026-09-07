@@ -102,7 +102,10 @@ fi
 [ "$got" = "$want" ] || die "sha256 mismatch — got $got, expected $want (from $src)"
 log "integrity OK ($src): $got"
 
-if [ -f "$STATE" ] && [ "$(cat "$STATE")" = "$got" ]; then
+# The early-exit must NOT skip a requested model change: the chat-model block lives
+# further down, so bailing out here on an unchanged asset would silently ignore
+# AZURE_CHAT_API_KEY on every deploy after the first.
+if [ -f "$STATE" ] && [ "$(cat "$STATE")" = "$got" ] && [ -z "${AZURE_CHAT_API_KEY:-}" ]; then
   log "no change — $got already deployed; exiting"
   exit 0
 fi
@@ -224,6 +227,9 @@ if [ -n "${AZURE_CHAT_API_KEY:-}" ]; then
   log "chat model -> ${chat_dep} (open-weight, Foundry); embeddings stay on the OpenAI resource"
 else
   log "AZURE_CHAT_API_KEY not set - leaving the pilot chat model unchanged"
+  log "  If you meant to set it: a bare 'VAR=value' on its own line sets a SHELL"
+  log "  variable, which a child process cannot see. Put it on the SAME line as the"
+  log "  command, or export it. Paste as ONE line - the pod terminal mangles \\ breaks."
 fi
 chmod 600 "$APP/.env"
 
