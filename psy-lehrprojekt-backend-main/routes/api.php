@@ -119,7 +119,11 @@ Route::post('/messages', function (Request $request) {
     if (! empty($reasoningEffort)) {
         $payload['reasoning_effort'] = $reasoningEffort; // minimal | low | medium | high
     } else {
-        $payload['temperature'] = 0.7;
+        // Configurable because it is not only a style knob. In TUTOR_STRUCTURED_OUTPUT
+        // json_object mode there is no schema enforcing the reply shape, and sampling
+        // variance breaks the JSON: measured on mistral-small-2503, the same request
+        // produced a usable two-layer answer 9/16 times at 0.7 and 16/16 at 0.3.
+        $payload['temperature'] = (float) env('AZURE_TEMPERATURE', 0.7);
     }
 
     $gptResponse = Http::withHeaders([

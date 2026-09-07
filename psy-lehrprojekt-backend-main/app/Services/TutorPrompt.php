@@ -38,10 +38,12 @@ class TutorPrompt
      */
     public static function assemble(array $messages, array $hits): array
     {
-        $out = [[
-            'role' => 'system',
-            'content' => (string) config('tutor.system_prompt'),
-        ]];
+        $system = (string) config('tutor.system_prompt');
+        if (self::mode() === 'json_object') {
+            $system .= "\n".config('tutor.json_instruction');
+        }
+
+        $out = [['role' => 'system', 'content' => $system]];
 
         $current = array_pop($messages);
 
@@ -49,8 +51,14 @@ class TutorPrompt
             $out[] = ['role' => $m['role'], 'content' => $m['content']];
         }
 
+        // Passages go in a USER message, not a second system one. gpt-oss silently
+        // DROPS a second system message - grounding measured 0% on the gold set until
+        // this changed - and Foundry rejects the 'developer' role outright (HTTP 422).
+        // A separate user turn is the only shape that works on every model tried while
+        // keeping both invariants above intact: the cacheable prefix is untouched, and
+        // the student's own words stay their own final message for history.sent.
         if ($hits !== []) {
-            $out[] = ['role' => 'system', 'content' => self::renderMaterials($hits)];
+            $out[] = ['role' => 'user', 'content' => self::renderMaterials($hits)];
         }
 
         if ($current !== null) {
@@ -83,11 +91,40 @@ class TutorPrompt
         return implode("\n", $lines);
     }
 
-    /** Structured-output schema. Null when disabled, so the caller omits the key. */
+    /**
+     * Normalised structured-output mode: json_schema | json_object | off.
+     *
+     * Accepts the legacy booleans too, so an existing .env carrying
+     * TUTOR_STRUCTURED_OUTPUT=true keeps its previous behaviour.
+     */
+    private static function mode(): string
+    {
+        $m = config('tutor.structured_output');
+
+        if ($m === true || $m === 'true') {
+            return 'json_schema';
+        }
+        if ($m === false || $m === 'false' || $m === null || $m === '') {
+            return 'off';
+        }
+
+        return in_array($m, ['json_schema', 'json_object'], true) ? $m : 'off';
+    }
+
+    /** Structured-output request. Null when disabled, so the caller omits the key. */
     public static function responseFormat(): ?array
     {
-        if (! config('tutor.structured_output')) {
+        $mode = self::mode();
+
+        if ($mode === 'off') {
             return null;
+        }
+
+        // Open-weight models on Foundry REFUSE json_schema with an HTTP 400 - the
+        // request fails outright rather than degrading - so they get plain JSON mode
+        // and the shape is asked for in the prompt instead.
+        if ($mode === 'json_object') {
+            return ['type' => 'json_object'];
         }
 
         return [
@@ -127,12 +164,30 @@ class TutorPrompt
      */
     public static function parse(?string $raw, array $hits): array
     {
-        $raw = (string) $raw;
+        $raw = trim((string) $raw);
+
+        // json_object mode carries no shape guarantee, and models habitually wrap the
+        // object in a ``` fence. json_decode rejects that, which would silently demote
+        // a perfectly good two-layer answer into the prose fallback.
+        if (str_starts_with($raw, '```')) {
+            $raw = trim((string) preg_replace('/\A```[a-zA-Z]*\s*|\s*```\z/', '', $raw));
+        }
+
         $materials = null;
         $general = $raw;
         $cited = [];
 
         $decoded = json_decode($raw, true);
+
+        // json_object mode is not schema-enforced, and this model emits literal
+        // newlines inside string values often enough to matter - measured at 2-5
+        // replies in 16 on mistral-small-2503, every one of them failing with
+        // "Unterminated string". Escaping control characters that occur INSIDE a
+        // string literal recovers exactly those, and is a no-op on valid JSON.
+        if (! is_array($decoded)) {
+            $decoded = json_decode(self::repairControlChars($raw), true);
+        }
+
         if (is_array($decoded) && array_key_exists('from_general', $decoded)) {
             $materials = isset($decoded['from_materials']) && is_string($decoded['from_materials'])
                 ? trim($decoded['from_materials'])
@@ -192,6 +247,61 @@ class TutorPrompt
             'sources' => $sources,
             'content' => self::render($materials, $general, $sources),
         ];
+    }
+
+    /**
+     * Escape raw control characters that appear inside JSON string literals.
+     *
+     * Deliberately character-by-character rather than a regex: a regex cannot tell
+     * a newline inside a string from one between keys, and escaping the latter would
+     * corrupt otherwise-valid JSON. Tracks string state and backslash escapes so an
+     * already-escaped sequence is left alone.
+     */
+    private static function repairControlChars(string $raw): string
+    {
+        $out = '';
+        $inString = false;
+        $escaped = false;
+
+        for ($i = 0, $n = strlen($raw); $i < $n; $i++) {
+            $ch = $raw[$i];
+
+            if ($escaped) {
+                $out .= $ch;
+                $escaped = false;
+
+                continue;
+            }
+
+            if ($inString && $ch === '\\') {
+                $out .= $ch;
+                $escaped = true;
+
+                continue;
+            }
+
+            if ($ch === '"') {
+                $inString = ! $inString;
+                $out .= $ch;
+
+                continue;
+            }
+
+            if ($inString) {
+                $out .= match ($ch) {
+                    "\n" => '\\n',
+                    "\r" => '\\r',
+                    "\t" => '\\t',
+                    default => $ch,
+                };
+
+                continue;
+            }
+
+            $out .= $ch;
+        }
+
+        return $out;
     }
 
     /**

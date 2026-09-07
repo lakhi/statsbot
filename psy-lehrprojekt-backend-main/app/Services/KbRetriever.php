@@ -118,7 +118,7 @@ class KbRetriever
 
         $response = Http::withHeaders([
             'Content-Type' => 'application/json',
-            'api-key' => env('AZURE_API_KEY', 'no_key_available'),
+            'api-key' => $cfg['api_key'] ?? env('AZURE_API_KEY', 'no_key_available'),
         ])->timeout($cfg['timeout'])->post($url, [
             'input' => $query,
             'dimensions' => (int) $cfg['dims'],

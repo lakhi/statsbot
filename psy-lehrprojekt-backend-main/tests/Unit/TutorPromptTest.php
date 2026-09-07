@@ -38,8 +38,10 @@ class TutorPromptTest extends TestCase
         $this->assertSame('first answer', $out[2]['content']);
 
         // Volatile passages go last, immediately before the student's turn, so a
-        // changing retrieval never invalidates the cached prefix.
-        $this->assertSame('system', $out[3]['role']);
+        // changing retrieval never invalidates the cached prefix. They must be a USER
+        // message: gpt-oss drops a second system message outright, which silently
+        // emptied the materials layer.
+        $this->assertSame('user', $out[3]['role']);
         $this->assertStringContainsString('hyptest-003', $out[3]['content']);
         $this->assertStringContainsString('Course materials', $out[3]['content']);
 
@@ -123,12 +125,53 @@ class TutorPromptTest extends TestCase
         $this->assertSame('Just prose, no schema honoured.', $out['from_general']);
     }
 
-    public function test_response_format_can_be_disabled(): void
+    public function test_response_format_modes(): void
     {
+        config(['tutor.structured_output' => 'json_schema']);
+        $this->assertSame('json_schema', TutorPrompt::responseFormat()['type']);
+
+        // Open-weight models on Foundry reject json_schema with an HTTP 400, so they
+        // get plain JSON mode instead. Asking for the schema anyway fails the request.
+        config(['tutor.structured_output' => 'json_object']);
+        $this->assertSame(['type' => 'json_object'], TutorPrompt::responseFormat());
+
+        config(['tutor.structured_output' => 'off']);
+        $this->assertNull(TutorPrompt::responseFormat());
+
+        // Legacy booleans keep working, so an existing .env needs no edit.
         config(['tutor.structured_output' => true]);
         $this->assertSame('json_schema', TutorPrompt::responseFormat()['type']);
 
         config(['tutor.structured_output' => false]);
         $this->assertNull(TutorPrompt::responseFormat());
+    }
+
+    public function test_json_object_mode_adds_the_shape_instruction_to_the_system_prompt(): void
+    {
+        config(['tutor.structured_output' => 'json_object']);
+        $out = TutorPrompt::assemble([['role' => 'user', 'content' => 'hi']], []);
+        $this->assertStringContainsString('from_materials', $out[0]['content']);
+
+        // In json_schema mode the schema already carries the shape; repeating it in
+        // the prompt would only burn cacheable prefix tokens.
+        config(['tutor.structured_output' => 'json_schema']);
+        $out = TutorPrompt::assemble([['role' => 'user', 'content' => 'hi']], []);
+        $this->assertStringNotContainsString('no ``` code fences', $out[0]['content']);
+    }
+
+    public function test_a_fenced_json_reply_is_still_parsed_as_two_layers(): void
+    {
+        // json_object mode carries no shape guarantee and models habitually fence the
+        // object. Without stripping, a correct answer would be demoted to prose.
+        $raw = "```json\n".json_encode([
+            'from_materials' => 'The notes define the p-value as P(T >= c | H0).',
+            'from_general' => 'It measures surprise under the null.',
+            'citations' => ['hyptest-003'],
+        ])."\n```";
+
+        $out = TutorPrompt::parse($raw, $this->hits());
+
+        $this->assertSame('The notes define the p-value as P(T >= c | H0).', $out['from_materials']);
+        $this->assertCount(1, $out['sources']);
     }
 }
