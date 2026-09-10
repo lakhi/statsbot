@@ -55,13 +55,7 @@ return [
     */
 
     'embed' => [
-        // The embedding deployment may live on a DIFFERENT Azure resource from the
-        // chat model. Open-weight chat models require a Foundry (AIServices) account,
-        // while text-embedding-3-large can only be deployed on an Azure OpenAI one,
-        // so the two split apart as soon as the tutor stops using an OpenAI model.
-        // Both fall back to the shared AZURE_* values, so an unsplit .env still works.
-        'endpoint' => env('AZURE_EMBED_ENDPOINT', env('AZURE_ENDPOINT')),
-        'api_key' => env('AZURE_EMBED_API_KEY', env('AZURE_API_KEY')),
+        'endpoint' => env('AZURE_ENDPOINT'),
         'deployment' => env('AZURE_EMBED_DEPLOYMENT', 'statsbot-embed-3-large'),
         'api_version' => env('AZURE_EMBED_API_VERSION', '2024-10-21'),
         'model' => env('AZURE_EMBED_MODEL', 'text-embedding-3-large'),
@@ -85,38 +79,9 @@ return [
     |
     */
 
-    /*
-    | How the two layers are extracted. Three modes, because model families differ
-    | and the difference is NOT a quality ranking - it is what the serving layer
-    | accepts:
-    |
-    |   'json_schema'  Schema-enforced. Azure OpenAI models only (gpt-5-mini,
-    |                  gpt-oss). Strongest guarantee: the shape cannot come back wrong.
-    |   'json_object'  Free-form JSON, shape asked for in the prompt. What every
-    |                  open-weight model on Foundry supports; they REJECT json_schema
-    |                  outright (HTTP 400), they do not merely ignore it.
-    |   'off'          No response_format at all; parse() falls back to prose.
-    |
-    | Measured on the pilot gold set (22 questions): mistral-small-2503 scores 0% in
-    | json_schema mode purely because the request is refused, and 100% in json_object
-    | mode. Reading that as a model weakness rather than an API gap would have ruled
-    | out every self-hostable model for the wrong reason.
-    |
-    | Legacy booleans still work: true -> json_schema, false -> off.
-    */
-    'structured_output' => env('TUTOR_STRUCTURED_OUTPUT', 'json_schema'),
-
-    // Appended to the system prompt in 'json_object' mode only. In 'json_schema'
-    // mode the schema carries this and repeating it wastes cacheable prefix tokens.
-    'json_instruction' => <<<'JSON'
-
-        Reply with a single JSON object and nothing else - no prose before or after
-        it, and no ``` code fences. Use exactly these three keys:
-
-        {"from_materials": <string, or null if no excerpt addresses the question>,
-         "from_general": <string, always present>,
-         "citations": [<ids of the excerpts you actually used>]}
-        JSON,
+    // Azure needs an api-version supporting response_format json_schema.
+    // Set false to fall back to prose parsing (see TutorPrompt::parse).
+    'structured_output' => (bool) env('TUTOR_STRUCTURED_OUTPUT', true),
 
     'system_prompt' => <<<'PROMPT'
         You are StatsBot, a statistics tutor for psychology students at the University of Vienna.

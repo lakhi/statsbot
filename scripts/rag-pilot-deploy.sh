@@ -10,13 +10,6 @@
 #   Deploy:
 #     EXPECT=<sha256> bash /var/www/rag-pilot-deploy.sh
 #
-#   Deploy AND point the tutor at an open-weight model on the Foundry resource:
-#     AZURE_CHAT_API_KEY=<foundry key> EXPECT=<sha256> bash /var/www/rag-pilot-deploy.sh
-#
-#   Without AZURE_CHAT_API_KEY the pilot keeps whatever chat model it already had
-#   (on a first install, the live one), so the model swap is opt-in per deploy and
-#   the key never has to live in the repo or the release asset.
-#
 # ISOLATION IS THE POINT. This script writes to exactly three NEW paths and
 # nothing else:
 #
@@ -102,10 +95,7 @@ fi
 [ "$got" = "$want" ] || die "sha256 mismatch — got $got, expected $want (from $src)"
 log "integrity OK ($src): $got"
 
-# The early-exit must NOT skip a requested model change: the chat-model block lives
-# further down, so bailing out here on an unchanged asset would silently ignore
-# AZURE_CHAT_API_KEY on every deploy after the first.
-if [ -f "$STATE" ] && [ "$(cat "$STATE")" = "$got" ] && [ -z "${AZURE_CHAT_API_KEY:-}" ]; then
+if [ -f "$STATE" ] && [ "$(cat "$STATE")" = "$got" ]; then
   log "no change — $got already deployed; exiting"
   exit 0
 fi
@@ -181,57 +171,13 @@ AZURE_EMBED_API_VERSION=2024-10-21
 AZURE_EMBED_DIMENSIONS=3072
 AZURE_EMBED_TIMEOUT=10
 
-TUTOR_STRUCTURED_OUTPUT=json_schema
+TUTOR_STRUCTURED_OUTPUT=true
 
 # Small budget so a runaway test cannot spend much.
 TOKEN_LIMIT=200000
 ENV
   chmod 600 "$APP/.env"
 fi
-
-# --- 5b. chat model, and the embedding split it forces -----------------------
-# Adds or replaces one key in the pilot .env. Values contain URLs and base64 keys,
-# so this rewrites by filter-and-append rather than sed, which would choke on / and &.
-set_env() {
-  local k="$1" v="$2" t
-  t="$(mktemp)"
-  grep -vE "^${k}=" "$APP/.env" > "$t" 2>/dev/null || true
-  printf '%s=%s\n' "$k" "$v" >> "$t"
-  cat "$t" > "$APP/.env"
-  rm -f "$t"
-}
-
-# text-embedding-3-large can ONLY be deployed on an Azure OpenAI resource, while an
-# open-weight chat model can ONLY be deployed on a Foundry (AIServices) one. Pin the
-# embeddings to the live resource BEFORE the chat keys are repointed, or retrieval
-# starts calling Foundry for embeddings and every search silently returns [].
-live_ep="$(grep -E '^AZURE_ENDPOINT=' "$LIVE_APP/.env" | head -1 | cut -d= -f2-)"
-live_key="$(grep -E '^AZURE_API_KEY=' "$LIVE_APP/.env" | head -1 | cut -d= -f2-)"
-[ -n "$live_ep" ]  && set_env AZURE_EMBED_ENDPOINT "$live_ep"
-[ -n "$live_key" ] && set_env AZURE_EMBED_API_KEY  "$live_key"
-
-if [ -n "${AZURE_CHAT_API_KEY:-}" ]; then
-  chat_dep="${AZURE_CHAT_DEPLOYMENT:-mistral-small-2503}"
-  set_env AZURE_ENDPOINT          "${AZURE_CHAT_ENDPOINT:-https://statsboteval-llm-infra.cognitiveservices.azure.com}"
-  set_env AZURE_DEPLOYMENT        "$chat_dep"
-  set_env AZURE_MODEL             "$chat_dep"
-  set_env AZURE_API_VERSION       "${AZURE_CHAT_API_VERSION:-2024-10-21}"
-  set_env AZURE_API_KEY           "$AZURE_CHAT_API_KEY"
-  # Open-weight models are not reasoning models; a stray reasoning_effort is rejected.
-  set_env AZURE_REASONING_EFFORT  ""
-  # They also refuse response_format json_schema outright (HTTP 400), so plain JSON.
-  set_env TUTOR_STRUCTURED_OUTPUT "${TUTOR_STRUCTURED_OUTPUT:-json_object}"
-  # Without a schema, sampling variance alone breaks the JSON and the two layers
-  # collapse into one: 9/16 valid at 0.7 versus 16/16 at 0.3 on mistral-small-2503.
-  set_env AZURE_TEMPERATURE       "${AZURE_TEMPERATURE:-0.3}"
-  log "chat model -> ${chat_dep} (open-weight, Foundry); embeddings stay on the OpenAI resource"
-else
-  log "AZURE_CHAT_API_KEY not set - leaving the pilot chat model unchanged"
-  log "  If you meant to set it: a bare 'VAR=value' on its own line sets a SHELL"
-  log "  variable, which a child process cannot see. Put it on the SAME line as the"
-  log "  command, or export it. Paste as ONE line - the pod terminal mangles \\ breaks."
-fi
-chmod 600 "$APP/.env"
 
 chmod -R ug+rwX "$APP" "$API_PUB" "$WEB"
 chmod -R ug+rwX "$APP/storage" "$APP/bootstrap/cache"
@@ -284,9 +230,7 @@ fi
 log "PILOT tables: $ragcount"
 
 echo "$got" > "$STATE"
-log "=== deploy done — RAG_ENABLED=$(grep -oP '(?<=^RAG_ENABLED=).*' "$APP/.env" || echo '?') \
-  model=$(grep -oP '(?<=^AZURE_DEPLOYMENT=).*' "$APP/.env" || echo '?') \
-  structured=$(grep -oP '(?<=^TUTOR_STRUCTURED_OUTPUT=).*' "$APP/.env" || echo '?') ==="
+log "=== deploy done — RAG_ENABLED=$(grep -oP '(?<=^RAG_ENABLED=).*' "$APP/.env" || echo '?') ==="
 cat <<EOF
 
 Open:  https://statsbot.univie.ac.at/rag-pilot-test/
