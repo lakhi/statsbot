@@ -8,6 +8,8 @@ use Illuminate\Support\Facades\Http;
 use App\Models\Student;
 use App\Models\History;
 
+use Illuminate\Support\Facades\DB;
+
 use App\Services\KbRetriever;
 use App\Services\TutorPrompt;
 
@@ -51,14 +53,32 @@ Route::post('/register', function(Request $request){
 
 });
 
+//These two went through raw DB::select until #4. Laravel applies the table
+//prefix in the query GRAMMAR, so DB::table()/Eloquent honour DB_PREFIX and a
+//raw SQL string does not. On the rag-pilot stack that meant writes landed in
+//rag_history via Eloquent while reads went to the unprefixed live table - an
+//empty history list, and a student_id that could collide with an unrelated
+//live row. Keep these on the builder.
 Route::get('/history', function(Request $request){
 
-    return DB::select("SELECT id, SUBSTRING(sent, 1, 200) as sent, started, created_at FROM history WHERE id IN (SELECT min(id) FROM history WHERE student_id = ? GROUP BY started)",[$request->student->id]);
+    $firstOfEachThread = DB::table('history')
+        ->selectRaw('MIN(id)')
+        ->where('student_id', $request->student->id)
+        ->groupBy('started');
+
+    return DB::table('history')
+        ->selectRaw('id, SUBSTRING(sent, 1, 200) as sent, started, created_at')
+        ->whereIn('id', $firstOfEachThread)
+        ->get();
 });
 
 Route::get('/history/{started}', function(Request $request, $started){
 
-    return DB::select("SELECT * FROM history WHERE student_id = ? AND started = ? ORDER BY id", [$request->student->id, $started]);
+    return DB::table('history')
+        ->where('student_id', $request->student->id)
+        ->where('started', $started)
+        ->orderBy('id')
+        ->get();
 
 });
 
