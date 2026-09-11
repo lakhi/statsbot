@@ -222,13 +222,10 @@ export class ChatComponent implements OnInit {
           answerMessage.content = data.content;
           answerMessage.role = "assistant";
 
-          //two-layer answer: course materials vs. the tutor's own explanation.
-          //from_materials is null when nothing relevant was retrieved, and the
-          //template then shows materials_note instead.
-          answerMessage.from_materials = data.from_materials;
-          answerMessage.from_general = data.from_general;
+          //passages the answer declared it drew on; empty in the no-rag arm and
+          //whenever nothing cleared the similarity floor, in which case the
+          //template simply renders no chips.
           answerMessage.sources = data.sources;
-          answerMessage.materials_note = data.materials_note;
 
             this.messages.update(messages => ([
               ...messages,

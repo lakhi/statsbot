@@ -67,7 +67,7 @@ class MessagesRagTest extends TestCase
         ]));
     }
 
-    private function seedStudent(int $tokens = 10000): Student
+    private function seedStudent(int $tokens = 10000, ?string $arm = 'rag'): Student
     {
         $s = new Student;
         $s->uid = 'u:test01';
@@ -76,6 +76,7 @@ class MessagesRagTest extends TestCase
         $s->token_limit = $tokens;
         $s->token_left = $tokens;
         $s->activated = true;
+        $s->arm = $arm;
         $s->save();
 
         return $s;
@@ -104,22 +105,23 @@ class MessagesRagTest extends TestCase
         ]);
     }
 
-    public function test_grounded_answer_returns_both_layers_with_sources(): void
+    public function test_grounded_answer_returns_one_answer_with_sources(): void
     {
         $this->seedStudent();
         $this->fakeAzure([
-            'from_materials' => 'Your notes define the p-value as P(T >= c | H0).',
-            'from_general' => 'It measures how surprising the data would be under H0.',
+            'answer' => 'Your notes define the p-value as P(T >= c | H0); it measures how '
+                .'surprising the data would be under H0.',
             'citations' => ['hyptest-003'],
         ]);
 
         $this->ask('what is a p-value?')
             ->assertOk()
             ->assertJsonPath('grounded', true)
-            ->assertJsonPath('from_materials', 'Your notes define the p-value as P(T >= c | H0).')
             ->assertJsonPath('sources.0.id', 'hyptest-003')
             ->assertJsonPath('sources.0.page_start', 2)
-            ->assertJsonStructure(['content', 'from_materials', 'from_general', 'sources', 'token_left', 'costs']);
+            ->assertJsonMissingPath('from_materials')
+            ->assertJsonMissingPath('materials_note')
+            ->assertJsonStructure(['content', 'sources', 'grounded', 'token_left', 'costs']);
 
         // which corpus answered must be recorded at write time - it cannot be
         // reconstructed once the index is rebuilt
@@ -133,8 +135,7 @@ class MessagesRagTest extends TestCase
     {
         $this->seedStudent();
         $this->fakeAzure([
-            'from_materials' => 'materials layer',
-            'from_general' => 'general layer',
+            'answer' => 'one coherent answer',
             'citations' => ['hyptest-003'],
         ]);
 
@@ -145,13 +146,13 @@ class MessagesRagTest extends TestCase
         $this->assertSame($question, $row->sent,
             'injected passages must never leak into the persisted student message');
         $this->assertStringNotContainsString('Course materials', $row->sent);
-        $this->assertStringContainsString('materials layer', $row->received);
+        $this->assertStringContainsString('one coherent answer', $row->received);
     }
 
     public function test_the_prompt_sent_to_azure_has_the_cacheable_ordering(): void
     {
         $this->seedStudent();
-        $this->fakeAzure(['from_materials' => 'm', 'from_general' => 'g', 'citations' => ['hyptest-003']]);
+        $this->fakeAzure(['answer' => 'a', 'citations' => ['hyptest-003']]);
 
         $this->ask('what is a p-value?')->assertOk();
 
@@ -176,17 +177,17 @@ class MessagesRagTest extends TestCase
     {
         config(['tutor.rag_enabled' => false]);
         $this->seedStudent();
-        $this->fakeAzure(['from_materials' => null, 'from_general' => 'general only', 'citations' => []]);
+        $this->fakeAzure(['answer' => 'general only', 'citations' => []]);
 
         $this->ask('what is a p-value?')
             ->assertOk()
             ->assertJsonPath('grounded', false)
-            ->assertJsonPath('from_materials', null);
+            ->assertJsonPath('sources', []);
 
         Http::assertNotSent(fn ($request) => str_contains($request->url(), 'embeddings'));
     }
 
-    public function test_out_of_corpus_question_gets_the_not_covered_note(): void
+    public function test_out_of_corpus_question_is_answered_without_sources_or_a_note(): void
     {
         $this->seedStudent();
         Http::fake([
@@ -194,8 +195,7 @@ class MessagesRagTest extends TestCase
             '*/embeddings*' => Http::response(['data' => [['embedding' => [0, 0, 1], 'index' => 0]]]),
             '*/chat/completions*' => Http::response([
                 'choices' => [['message' => ['content' => json_encode([
-                    'from_materials' => null,
-                    'from_general' => 'ANOVA partitions variance into between and within components.',
+                    'answer' => 'ANOVA partitions variance into between and within components.',
                     'citations' => [],
                 ])]]],
                 'usage' => ['prompt_tokens' => 400, 'completion_tokens' => 200, 'total_tokens' => 600],
@@ -204,15 +204,18 @@ class MessagesRagTest extends TestCase
 
         $response = $this->ask('how do I compute an F-ratio in ANOVA?')->assertOk();
 
-        $response->assertJsonPath('grounded', false);
-        $this->assertStringContainsString(config('tutor.no_material_note'), $response->json('content'));
-        $this->assertStringContainsString('ANOVA partitions variance', $response->json('from_general'));
+        $response->assertJsonPath('grounded', false)->assertJsonPath('sources', []);
+
+        // the old two-layer shape announced "not covered by the course materials"
+        // on every ungrounded turn, which marked the control arm on turn one
+        $this->assertStringContainsString('ANOVA partitions variance', $response->json('content'));
+        $this->assertStringNotContainsStringIgnoringCase('course materials', $response->json('content'));
     }
 
     public function test_tokens_are_still_billed_to_the_student(): void
     {
         $this->seedStudent(10000);
-        $this->fakeAzure(['from_materials' => 'm', 'from_general' => 'g', 'citations' => ['hyptest-003']], 900, 300);
+        $this->fakeAzure(['answer' => 'a', 'citations' => ['hyptest-003']], 900, 300);
 
         $this->ask('what is a p-value?')
             ->assertOk()
@@ -229,7 +232,7 @@ class MessagesRagTest extends TestCase
             '*/embeddings*' => Http::response('boom', 503),
             '*/chat/completions*' => Http::response([
                 'choices' => [['message' => ['content' => json_encode([
-                    'from_materials' => null, 'from_general' => 'still helpful', 'citations' => [],
+                    'answer' => 'still helpful', 'citations' => [],
                 ])]]],
                 'usage' => ['prompt_tokens' => 100, 'completion_tokens' => 50, 'total_tokens' => 150],
             ]),
@@ -238,13 +241,76 @@ class MessagesRagTest extends TestCase
         $this->ask('what is a p-value?')
             ->assertOk()
             ->assertJsonPath('grounded', false)
-            ->assertJsonPath('from_general', 'still helpful');
+            ->assertJsonPath('content', 'still helpful');
+    }
+
+    public function test_the_no_rag_arm_skips_retrieval_even_while_rag_is_enabled(): void
+    {
+        // this is the trial itself: RAG_ENABLED stays true study-wide, and the
+        // student's arm is what decides whether this turn is grounded
+        $this->seedStudent(10000, 'no_rag');
+        $this->fakeAzure(['answer' => 'ungrounded answer', 'citations' => ['hyptest-003']]);
+
+        $this->ask('what is a p-value?')
+            ->assertOk()
+            ->assertJsonPath('grounded', false)
+            ->assertJsonPath('sources', []);
+
+        Http::assertNotSent(fn ($request) => str_contains($request->url(), 'embeddings'));
+
+        $row = History::first();
+        $this->assertNull($row->kb_version);
+        $this->assertNull($row->kb_chunks);
+    }
+
+    public function test_the_control_arm_gets_the_base_prompt_without_the_materials_block(): void
+    {
+        $this->seedStudent(10000, 'no_rag');
+        $this->fakeAzure(['answer' => 'a', 'citations' => []]);
+
+        $this->ask('what is a p-value?')->assertOk();
+
+        Http::assertSent(function ($request) {
+            if (! str_contains($request->url(), 'chat/completions')) {
+                return true;
+            }
+            $this->assertSame(
+                config('tutor.system_prompt_base'),
+                $request['messages'][0]['content']
+            );
+
+            return true;
+        });
+    }
+
+    public function test_the_arm_is_stamped_on_the_history_row(): void
+    {
+        // stamped, never joined from students.arm - a join would label this
+        // student's pre-study messages with the arm they were later allocated to
+        $this->seedStudent(10000, 'rag');
+        $this->fakeAzure(['answer' => 'a', 'citations' => ['hyptest-003']]);
+
+        $this->ask('what is a p-value?')->assertOk();
+
+        $this->assertSame('rag', History::first()->arm);
+    }
+
+    public function test_an_unallocated_student_is_never_grounded(): void
+    {
+        // arm = NULL is every student who used StatsBot before the trial opened
+        $this->seedStudent(10000, null);
+        $this->fakeAzure(['answer' => 'a', 'citations' => []]);
+
+        $this->ask('what is a p-value?')->assertOk()->assertJsonPath('grounded', false);
+
+        Http::assertNotSent(fn ($request) => str_contains($request->url(), 'embeddings'));
+        $this->assertNull(History::first()->arm);
     }
 
     public function test_students_out_of_tokens_are_still_refused(): void
     {
         $this->seedStudent(0);
-        $this->fakeAzure(['from_materials' => null, 'from_general' => 'g', 'citations' => []]);
+        $this->fakeAzure(['answer' => 'a', 'citations' => []]);
 
         $this->ask('what is a p-value?')->assertStatus(403);
         Http::assertNothingSent();

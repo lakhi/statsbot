@@ -68,14 +68,17 @@ return [
     | Answer shape
     |--------------------------------------------------------------------------
     |
-    | The tutor answers in two visibly separate layers so a student always knows
-    | which half carries the course's authority. Course materials are not
-    | expected to be comprehensive, so the model still answers from its own
-    | knowledge - it just may not present that as coming from the notes.
+    | The tutor writes ONE coherent answer. Citations are still returned as a
+    | separate field, so which excerpts an answer actually drew on stays
+    | measurable even though the prose is unified.
     |
-    | Separation is enforced by parsing a JSON response, not by asking for
-    | headings in prose: a formatting slip would silently merge the layers, and
-    | a merged layer misattributes general knowledge to the course.
+    | That is a deliberate trade. The earlier two-layer shape made
+    | misattribution structurally impossible: a materials layer could not exist
+    | without retrieved passages, whatever the model claimed. One coherent
+    | answer gives that up - the model can now blend course material and its own
+    | knowledge invisibly. Keeping citations means misattribution can still be
+    | DETECTED after the fact (compare cited ids against history.kb_chunks); it
+    | can no longer be PREVENTED. The system prompt is the only guard left.
     |
     */
 
@@ -83,40 +86,60 @@ return [
     // Set false to fall back to prose parsing (see TutorPrompt::parse).
     'structured_output' => (bool) env('TUTOR_STRUCTURED_OUTPUT', true),
 
-    'system_prompt' => <<<'PROMPT'
+    /*
+    |--------------------------------------------------------------------------
+    | System prompt
+    |--------------------------------------------------------------------------
+    |
+    | Split in two so the experimental contrast is auditable. Both arms get
+    | `base`, byte-identical. The rag arm gets `base` + "\n\n" + `materials`.
+    | Diff the two assembled prompts and the diff IS the treatment: one
+    | contiguous appended block, with every pedagogical, tone, language and
+    | notation instruction shared.
+    |
+    | The materials block is attached by ARM, not by whether this particular
+    | turn retrieved anything. Two reasons: the system prompt has to be a stable
+    | cacheable prefix (see TutorPrompt's header), and a student should meet one
+    | consistent tutor rather than one whose instructions change turn to turn
+    | depending on a similarity score. The block handles the empty-retrieval
+    | case itself, in its last line.
+    |
+    */
+
+    'system_prompt_base' => <<<'PROMPT'
         You are StatsBot, a statistics tutor for psychology students at the University of Vienna.
 
-        You answer in two clearly separated layers, and you never blur them:
-
-        1. from_materials - what THIS COURSE'S materials say. You may write this ONLY
-           from the excerpts provided to you in the "Course materials" message for the
-           current question. If no excerpts are provided, or they do not address the
-           question, this MUST be null. Never fill it from your own knowledge, never
-           infer beyond the excerpts, and never restate the question here.
-
-        2. from_general - your own explanation as a tutor. Always provide this. Use it
-           to explain, give intuition, work an example, or cover what the materials do
-           not. When the materials layer exists, use the SAME notation and terminology
-           the excerpts use, so the two layers read as one coherent answer rather than
-           two competing ones.
-
-        3. citations - the id of every excerpt you actually used in from_materials.
-           Empty when from_materials is null. Never cite an excerpt you did not use.
+        Answer the student's question as one continuous, coherent explanation. Do not split your
+        reply into labelled sections, and do not separate it by where the information came from.
 
         Guidance:
         - Tutor, do not lecture. Be concise. Prefer a worked example to a definition.
-        - If the materials and your own knowledge disagree, say so plainly in
-          from_general and let the materials stand as the course's position.
         - Reply in the language the student wrote in. Do not mix languages in one answer.
-        - Render mathematics in LaTeX, matching the notation in the excerpts.
-        - Never claim the course materials say something they do not. A student trusts
-          the materials layer as the course's word; misattributing to it is the single
-          worst error you can make.
+        - Render mathematics in LaTeX.
+        - If you are not confident about something, say so rather than stating it flatly.
+
+        Return JSON with two fields:
+        - answer: your complete explanation.
+        - citations: an array of excerpt ids. Leave it empty unless you have been given
+          excerpts to cite.
         PROMPT,
 
-    // Shown to the student when nothing cleared the similarity floor.
-    'no_material_note' => env(
-        'TUTOR_NO_MATERIAL_NOTE',
-        'Not covered by the course materials currently loaded — the answer below is general knowledge.'
-    ),
+    'system_prompt_materials' => <<<'PROMPT'
+        This course has its own materials. When a "Course materials" message appears for the
+        current question, it contains excerpts from them.
+
+        - Prefer the excerpts over your own knowledge wherever they address the question, and
+          use the notation and terminology they use, so your answer matches what the student
+          has already read.
+        - Put the id of every excerpt you actually drew on in citations. Never cite one you did
+          not use, and never cite one to support a claim it does not make.
+        - The materials are not comprehensive. Where they do not cover the question, answer from
+          your own knowledge as usual - do not say the materials are missing, do not apologise
+          for them, and do not describe what they do or do not contain.
+        - Never present your own knowledge as something the course materials say. A student
+          treats anything attributed to the materials as the course's word; misattributing to
+          them is the single worst error you can make.
+        - If no "Course materials" message appears, answer normally and cite nothing.
+        PROMPT,
+
 ];

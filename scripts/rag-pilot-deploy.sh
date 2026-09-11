@@ -147,7 +147,7 @@ fi
 # --- 5. pilot .env: derived from live, with the pilot overrides appended ---
 if [ ! -f "$APP/.env" ]; then
   log "creating pilot .env from the live one"
-  grep -vE '^(APP_URL|DB_PREFIX|RAG_|AZURE_EMBED_|TUTOR_)=' "$LIVE_APP/.env" > "$APP/.env"
+  grep -vE '^(APP_URL|DB_PREFIX|RAG_|AZURE_EMBED_|TUTOR_|STUDY_)=' "$LIVE_APP/.env" > "$APP/.env"
   cat >> "$APP/.env" <<'ENV'
 
 # ---------------- RAG pilot overrides ----------------
@@ -175,6 +175,11 @@ TUTOR_STRUCTURED_OUTPUT=true
 
 # Small budget so a runaway test cannot spend much.
 TOKEN_LIMIT=200000
+
+# A/B trial. 'test' enables allocation against the test sequence and unlocks
+# the reset endpoint; 'off' disables allocation entirely.
+STUDY_PHASE=test
+STUDY_ADMIN_UIDS=lakhia92,abhag93
 ENV
   chmod 600 "$APP/.env"
 fi

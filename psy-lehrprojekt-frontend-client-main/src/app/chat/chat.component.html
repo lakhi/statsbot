@@ -62,44 +62,17 @@
     </mat-card-header>
     <mat-card-content>
 
-    <!-- Assistant turns from a live reply arrive in two layers so the student can
-         see what the course materials say and what the tutor added. Turns restored
-         from history carry only `content`, and fall through to the plain render. -->
-    @if(msg.role==="assistant" && msg.from_general){
+    <!-- One coherent answer. Live replies additionally carry `sources`; turns
+         restored from history carry `content` alone and simply render without
+         chips. -->
+    <div highlight-js [mode]="'default'" [options]="{}" style="white-space:pre-wrap;">{{msg.content}}</div>
 
-      @if(msg.from_materials){
-        <div class="layer layer-materials">
-          <div class="layer-label"><mat-icon inline>menu_book</mat-icon> From your course materials</div>
-          <div highlight-js [mode]="'default'" [options]="{}" class="layer-body">{{msg.from_materials}}</div>
-          @if(msg.sources?.length){
-            <div class="sources">
-              @for(source of msg.sources; track source.id){
-                <span class="source-chip">{{source.heading}} &middot; p.&nbsp;{{source.page_start}}</span>
-              }
-            </div>
-          }
-        </div>
-      }
-      @else{
-        <div class="layer layer-nomaterials">
-          <mat-icon inline>info_outline</mat-icon> {{msg.materials_note}}
-        </div>
-      }
-
-      <div class="layer layer-general">
-        <div class="layer-label"><mat-icon inline>psychology</mat-icon> Tutor explanation</div>
-        <div highlight-js [mode]="'default'" [options]="{}" class="layer-body">{{msg.from_general}}</div>
+    @if(msg.sources?.length){
+      <div class="sources">
+        @for(source of msg.sources; track source.id){
+          <span class="source-chip">{{source.heading}} &middot; p.&nbsp;{{source.page_start}}</span>
+        }
       </div>
-
-    }
-    @else{
-
-      <div highlight-js [mode]="'default'" [options]="{}" style="white-space:pre-wrap;">
-
-          {{msg.content}}
-
-      </div>
-
     }
 
     </mat-card-content>

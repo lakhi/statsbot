@@ -5,8 +5,8 @@ namespace App\Services;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Builds the message array sent to Azure, and takes the two-layer answer apart
- * again on the way back.
+ * Builds the message array sent to Azure, and takes the answer apart again on
+ * the way back.
  *
  * Two decisions here are load-bearing and easy to undo by accident.
  *
@@ -23,11 +23,15 @@ use Illuminate\Support\Facades\Log;
  *     the thesis analyses. Mixing injected context into it would corrupt that
  *     silently and unrecoverably.
  *
- * LAYER SEPARATION is enforced by parsing JSON, not by asking for headings. A
- * formatting slip in prose merges the layers, and a merged layer presents the
- * model's own knowledge as the course's position - the worst error this tool can
- * make. See parse(), which additionally refuses to emit a materials layer when
- * nothing was retrieved, whatever the model claims.
+ * ARM, NOT HITS, SELECTS THE PROMPT. assemble() takes $grounded - the student's
+ * trial arm - separately from $hits, the passages this particular turn found.
+ * The materials block is attached on the former. Attaching it on the latter
+ * would rewrite the cacheable prefix every time a question fell below
+ * RAG_MIN_SCORE, and would give a student a tutor whose instructions silently
+ * changed from turn to turn.
+ *
+ * The answer is ONE coherent explanation; citations remain a separate field so
+ * grounding stays measurable. See config/tutor.php for what that trade costs.
  */
 class TutorPrompt
 {
@@ -36,11 +40,11 @@ class TutorPrompt
      * @param  array<int,array<string,mixed>>  $hits
      * @return array<int,array{role:string,content:string}>
      */
-    public static function assemble(array $messages, array $hits): array
+    public static function assemble(array $messages, array $hits, bool $grounded = false): array
     {
         $out = [[
             'role' => 'system',
-            'content' => (string) config('tutor.system_prompt'),
+            'content' => self::systemPrompt($grounded),
         ]];
 
         $current = array_pop($messages);
@@ -60,13 +64,29 @@ class TutorPrompt
         return $out;
     }
 
+    /**
+     * The no-rag arm gets the base prompt alone; the rag arm gets the base plus
+     * the materials block. Everything else is identical between the arms, which
+     * is what makes the contrast auditable.
+     */
+    public static function systemPrompt(bool $grounded): string
+    {
+        $base = (string) config('tutor.system_prompt_base');
+
+        if (! $grounded) {
+            return $base;
+        }
+
+        return $base."\n\n".(string) config('tutor.system_prompt_materials');
+    }
+
     /** @param array<int,array<string,mixed>> $hits */
     private static function renderMaterials(array $hits): string
     {
         $lines = [
             'Course materials retrieved for the current question. These are excerpts from',
-            "the student's own course notes. Use them ONLY for from_materials, cite them by",
-            'the id in brackets, and do not treat them as something the student said.',
+            "the student's own course notes. Cite them by the id in brackets. They are",
+            'context, not something the student said.',
             '',
         ];
 
@@ -98,21 +118,17 @@ class TutorPrompt
                 'schema' => [
                     'type' => 'object',
                     'properties' => [
-                        'from_materials' => [
-                            'type' => ['string', 'null'],
-                            'description' => 'What the provided excerpts say. Null if none address the question.',
-                        ],
-                        'from_general' => [
+                        'answer' => [
                             'type' => 'string',
-                            'description' => "The tutor's own explanation. Always present.",
+                            'description' => 'The complete explanation, as one coherent answer.',
                         ],
                         'citations' => [
                             'type' => 'array',
                             'items' => ['type' => 'string'],
-                            'description' => 'Ids of excerpts actually used in from_materials.',
+                            'description' => 'Ids of excerpts actually drawn on. Empty when none were.',
                         ],
                     ],
-                    'required' => ['from_materials', 'from_general', 'citations'],
+                    'required' => ['answer', 'citations'],
                     'additionalProperties' => false,
                 ],
             ],
@@ -120,45 +136,36 @@ class TutorPrompt
     }
 
     /**
-     * Split the model's reply into its two layers.
+     * Pull the answer and its citations out of the model's reply.
      *
      * @param  array<int,array<string,mixed>>  $hits
-     * @return array{from_materials:?string,from_general:string,sources:array<int,array<string,mixed>>,content:string}
+     * @return array{answer:string,sources:array<int,array<string,mixed>>,content:string}
      */
     public static function parse(?string $raw, array $hits): array
     {
         $raw = (string) $raw;
-        $materials = null;
-        $general = $raw;
+        $answer = $raw;
         $cited = [];
 
         $decoded = json_decode($raw, true);
-        if (is_array($decoded) && array_key_exists('from_general', $decoded)) {
-            $materials = isset($decoded['from_materials']) && is_string($decoded['from_materials'])
-                ? trim($decoded['from_materials'])
-                : null;
-            $general = is_string($decoded['from_general']) ? trim($decoded['from_general']) : '';
+        if (is_array($decoded) && array_key_exists('answer', $decoded)) {
+            $answer = is_string($decoded['answer']) ? trim($decoded['answer']) : '';
             $cited = is_array($decoded['citations'] ?? null) ? $decoded['citations'] : [];
         } else {
             // Not JSON - the api-version may not support structured output, or the
-            // model ignored it. Fail SAFE: everything becomes the general layer, so
-            // nothing is ever misattributed to the course.
-            Log::info('TutorPrompt: reply was not structured JSON, treating as general');
+            // model ignored it. The prose is still a usable answer; it simply
+            // carries no citations, so the turn records as ungrounded.
+            Log::info('TutorPrompt: reply was not structured JSON, treating as plain answer');
         }
 
-        if ($materials === '') {
-            $materials = null;
-        }
-
-        // Structural guarantee: no retrieved passages means no materials layer,
-        // whatever the model asserts. This is what keeps a hallucinated citation
-        // from being presented to a student as the course's position.
+        // Nothing retrieved means nothing citable, whatever the model asserts.
         if ($hits === []) {
-            $materials = null;
             $cited = [];
         }
 
-        // Drop citations to ids that were never supplied.
+        // Drop citations to ids that were never supplied. A cited id that was not
+        // retrieved is the model inventing a source, and it must not reach a
+        // student as a chip implying the course said so.
         $byId = [];
         foreach ($hits as $h) {
             $byId[$h['id']] = $h;
@@ -179,45 +186,33 @@ class TutorPrompt
             }
         }
 
-        // A materials layer with no surviving citation cannot be shown as sourced.
-        if ($materials !== null && $sources === []) {
-            Log::warning('TutorPrompt: materials layer had no valid citation, demoting to general');
-            $general = trim($materials."\n\n".$general);
-            $materials = null;
-        }
-
         return [
-            'from_materials' => $materials,
-            'from_general' => $general,
+            'answer' => $answer,
             'sources' => $sources,
-            'content' => self::render($materials, $general, $sources),
+            'content' => self::render($answer, $sources),
         ];
     }
 
     /**
-     * Flatten the layers into the single string older clients expect, and into
-     * history.received. Keeps the labels so the transcript is still readable as
-     * two layers when analysed later.
+     * What gets persisted to history.received and shown to the student.
+     *
+     * The answer is already one coherent piece of prose, so this appends only a
+     * source line - the corpus keeps a readable record of which passages the
+     * turn drew on without the chips the UI renders separately.
      *
      * @param  array<int,array<string,mixed>>  $sources
      */
-    public static function render(?string $materials, string $general, array $sources): string
+    public static function render(string $answer, array $sources): string
     {
-        $parts = [];
-
-        if ($materials !== null) {
-            $refs = implode(', ', array_map(
-                static fn ($s) => $s['heading'].' (p. '.$s['page_start'].')',
-                $sources
-            ));
-            $parts[] = "**From your course materials**\n\n".$materials
-                .($refs !== '' ? "\n\n_Source: {$refs}_" : '');
-        } else {
-            $parts[] = '_'.config('tutor.no_material_note').'_';
+        if ($sources === []) {
+            return $answer;
         }
 
-        $parts[] = "**Tutor explanation**\n\n".$general;
+        $refs = implode(', ', array_map(
+            static fn ($s) => $s['heading'].' (p. '.$s['page_start'].')',
+            $sources
+        ));
 
-        return implode("\n\n---\n\n", $parts);
+        return trim($answer)."\n\n_Source: {$refs}_";
     }
 }
