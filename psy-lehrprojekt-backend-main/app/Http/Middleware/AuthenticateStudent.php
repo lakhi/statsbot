@@ -46,8 +46,12 @@ class AuthenticateStudent
             $request->merge(['student' => $student]);
         }
         //add existing student to request
+        //registered is deliberately NOT set here. It used to be forced to true
+        //on every request, which made students.registered unreadable: any
+        //student whose row existed reported as registered whatever the column
+        //said, so the disclaimer could never be shown again - and /register,
+        //the only place a trial arm is allocated, could never run for them. #6
         else{
-            $currentStudent->registered=true;
             $request->merge(['student' => $currentStudent]);
         }
        
