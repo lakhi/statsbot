@@ -15,8 +15,11 @@ Run from the repo root.
 
 2. Format check (auto-fixes):
    ```
-   cd psy-lehrprojekt-backend-main && ./vendor/bin/sail composer run pint
+   cd psy-lehrprojekt-backend-main && ./vendor/bin/sail php ./vendor/bin/pint --dirty
    ```
+   There is no `composer run pint` script — call the binary. Keep `--dirty`: several
+   older files (e.g. `AuthenticateStudent.php`) are not Pint-clean, and a bare `pint`
+   reformats them wholesale, burying a small behavioural change in a whitespace diff.
 
 3. Tests:
    ```

@@ -33,7 +33,7 @@ Run all PHP/Composer/Artisan commands from inside the backend folder; all `ng` /
 
 - Dev stack: `./vendor/bin/sail up` (brings up app on :80, MySQL, phpMyAdmin on :8081, Vite on :5173)
 - Tests: `./vendor/bin/sail artisan test` (PHPUnit)
-- Format: `./vendor/bin/sail composer run pint` (Laravel Pint — the only configured formatter)
+- Format: `./vendor/bin/sail php ./vendor/bin/pint --dirty` (Laravel Pint — the only configured formatter). There is no `composer run pint` script; `--dirty` limits Pint to files you changed.
 
 Do not run `php artisan` directly when Sail is in use; the DB connection won't resolve. Use `./vendor/bin/sail artisan ...` instead.
 
