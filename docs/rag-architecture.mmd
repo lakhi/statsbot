@@ -1,0 +1,18 @@
+flowchart TB
+    subgraph prep["Prepared in advance"]
+        PDF["📄 Course PDF"] --> SPLIT["✂️ Split into passages,<br/>convert each to an embedding<br/><i>Azure OpenAI</i>"]
+    end
+    SPLIT -->|via GitHub| LIB[("📚 Passage library<br/><i>ZID webspace</i>")]
+
+    Q["👤 Student asks StatsBot<br/><i>ZID webspace</i>"] --> GRP{"Course-materials<br/>group?"}
+    GRP -->|Yes| FIND["🔍 Find up to 3 passages<br/>closest in meaning<br/><i>Azure OpenAI</i>"]
+    LIB --> FIND
+    FIND --> GPT["🤖 GPT writes the answer<br/><i>Azure OpenAI · EU</i>"]
+    GRP -->|No| GPT
+    GPT --> ANS["💬 Student gets the answer"]
+    GPT --> DB[("🗄️ Chat + study data<br/><i>ZID MySQL</i>")]
+
+    classDef azure fill:#dbeafe,stroke:#2563eb,color:#000
+    classDef zid fill:#fef3c7,stroke:#d97706,color:#000
+    class SPLIT,FIND,GPT azure
+    class Q,LIB,DB zid
