@@ -86,9 +86,18 @@ Route::post('/messages', function (Request $request) {
     }
 
 
+    //System prompt - formatting only. Without one the model writes maths as plain text
+    //(sqrt(n), Σ_{i=1}^n x_i), which the chat cannot typeset; asked for LaTeX, it returns
+    //formulas the frontend renders with KaTeX (RichTextPipe). It is prepended to the payload
+    //only: $messages - and so history.sent below - stays exactly what the student wrote.
+    $systemPrompt = <<<'PROMPT'
+        Write all mathematics in LaTeX: use \( ... \) for formulas inside a sentence and
+        \[ ... \] for formulas on a line of their own. Do not put formulas in code blocks.
+        PROMPT;
+
     $payload = [
         'model' => env('AZURE_MODEL', 'no_endpoint_available'),
-        'messages' => $messages,
+        'messages' => array_merge([['role' => 'system', 'content' => $systemPrompt]], $messages),
     ];
 
     //reasoning models (e.g. gpt-5-mini) reject a custom temperature and use reasoning_effort instead;
