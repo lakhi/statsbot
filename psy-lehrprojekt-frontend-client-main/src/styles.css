@@ -178,7 +178,9 @@ main{
 
 .message{
   width: fit-content; margin-bottom: 5px; background-color: white;
-
+  /* fit-content alone grows the card to the widest formula, which can be wider
+     than a phone; capped, the formula scrolls inside the card instead */
+  max-width: 100%;
 }
 
 .message mat-card-header {
@@ -197,6 +199,22 @@ main{
   padding-bottom: 7px;
   font-size: 0.8em;
   }
+
+/* Rendered tutor answers (Markdown + LaTeX, see RichTextPipe).
+   Global on purpose: HTML set through [innerHTML] does not get the component's
+   encapsulation attributes, so chat.component.css could not reach it. */
+.rich-text > :first-child { margin-top: 0; }
+.rich-text > :last-child { margin-bottom: 0; }
+.rich-text p, .rich-text ul, .rich-text ol { margin: 0 0 0.6em; }
+
+/* long formulas scroll inside the card instead of overflowing it on phones */
+.rich-text .katex-display { margin: 0.5em 0; padding: 2px 0; overflow-x: auto; overflow-y: hidden; }
+
+.rich-text pre { margin: 0 0 0.6em; }
+.rich-text :not(pre) > code { background-color: #eef0f4; border-radius: 4px; padding: 1px 4px; }
+
+.rich-text table { display: block; overflow-x: auto; border-collapse: collapse; margin: 0 0 0.6em; }
+.rich-text th, .rich-text td { border: 1px solid #d0d4da; padding: 2px 8px; }
 
  ::ng-deep .mdc-linear-progress__bar-inner {
     border-color: #0063a6 !important;
