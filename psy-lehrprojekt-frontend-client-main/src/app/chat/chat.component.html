@@ -64,8 +64,15 @@
 
     <!-- One coherent answer. Live replies additionally carry `sources`; turns
          restored from history carry `content` alone and simply render without
-         chips. -->
-    <div highlight-js [mode]="'default'" [options]="{}" style="white-space:pre-wrap;">{{msg.content}}</div>
+         chips. Tutor answers are Markdown with LaTeX maths and get rendered (see
+         RichTextPipe); student messages stay plain text, so nothing a student
+         types is ever interpreted as HTML - trimmed, as the old wrapper did. -->
+    @if(msg.role==="assistant"){
+      <div class="rich-text" [innerHTML]="msg.content | richText"></div>
+    }
+    @else{
+      <div style="white-space:pre-wrap;">{{msg.content.trim()}}</div>
+    }
 
     @if(msg.sources?.length){
       <div class="sources">
