@@ -10,7 +10,7 @@ import { MatIconModule } from '@angular/material/icon';
 import { MatInputModule } from '@angular/material/input';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatToolbarModule } from '@angular/material/toolbar';
-import { HighlightJsDirective } from 'ngx-highlight-js';
+import { RichTextPipe } from './rich-text.pipe';
 import { Student } from '../models/student';
 import {MatSidenavModule} from '@angular/material/sidenav';
 import { DatePipe } from '@angular/common';
@@ -19,7 +19,7 @@ import { MatSnackBar } from '@angular/material/snack-bar';
 @Component({
   selector: 'app-chat',
   standalone: true,
-  imports: [MatToolbarModule, MatIconModule, MatInputModule, MatFormFieldModule, MatButtonModule, MatCardModule, MatProgressBarModule, FormsModule, HighlightJsDirective, MatSidenavModule, DatePipe],
+  imports: [MatToolbarModule, MatIconModule, MatInputModule, MatFormFieldModule, MatButtonModule, MatCardModule, MatProgressBarModule, FormsModule, RichTextPipe, MatSidenavModule, DatePipe],
   templateUrl: './chat.component.html',
   styleUrl: './chat.component.css'
 })
