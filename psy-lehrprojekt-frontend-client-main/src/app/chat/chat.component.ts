@@ -14,7 +14,14 @@ import { RichTextPipe } from './rich-text.pipe';
 import { Student } from '../models/student';
 import {MatSidenavModule} from '@angular/material/sidenav';
 import { DatePipe } from '@angular/common';
-import { MatSnackBar } from '@angular/material/snack-bar';
+import { HttpErrorResponse } from '@angular/common/http';
+
+//Share of the token budget used before the student is told about it at all.
+//The budget is otherwise hidden during the trial: every turn resends the whole
+//dialogue, and rag-arm turns add retrieved passages on top, so a visible
+//counter would drain about twice as fast for one arm - a nudge on how much
+//students ask, and a cue to which arm they are in.
+const BUDGET_WARNING_PCT = 90;
 
 @Component({
   selector: 'app-chat',
@@ -44,10 +51,20 @@ export class ChatComponent implements OnInit {
 
   newMessage = signal("");
 
-  tokenLeft: Signal<number> = computed(() => this.student().token_left/this.student().token_limit*100);
+  //share of the budget used, whole percent, rounded DOWN so the notice never
+  //reads 100% while tokens are left. Integer arithmetic on purpose: (1 - x)*100
+  //can land at 89.999... for exactly 90% used and floor to 89.
+  budgetUsedPct: Signal<number> = computed(() => {
+    const {token_left, token_limit} = this.student();
+    return token_limit > 0 ? Math.floor((token_limit - token_left) * 100 / token_limit) : 0;
+  });
 
-  //costs of current chat
-  costs = signal<number>(0);
+  //same rule the backend refuses on (token_left <= 0)
+  budgetExhausted: Signal<boolean> = computed(() => this.student().token_left <= 0);
+
+  budgetWarning: Signal<boolean> = computed(() =>
+    !this.budgetExhausted() && this.budgetUsedPct() >= BUDGET_WARNING_PCT
+  );
 
   //timestamp start of chatsession to group messages to a chat-history
   started = -1;
@@ -57,7 +74,7 @@ export class ChatComponent implements OnInit {
 
   startMessage = ""
 
-  constructor(private dataService: DataService, private snackBar: MatSnackBar){
+  constructor(private dataService: DataService){
 
   }
 
@@ -104,9 +121,9 @@ export class ChatComponent implements OnInit {
 
     this.progressMode.set(true);
 
-      this.dataService.loadThread(started).subscribe(
+      this.dataService.loadThread(started).subscribe({
 
-        data => {
+        next: data => {
 
           //restore chat state of old chat
 
@@ -115,7 +132,6 @@ export class ChatComponent implements OnInit {
           this.messages.set([]);
 
           let tempMessages: Message[] = [];
-          let tempCosts = 0;
 
           //set static start message of tutor
           let msg = new Message();
@@ -139,22 +155,24 @@ export class ChatComponent implements OnInit {
               messageReceived.role = "assistant";
               tempMessages.push(messageReceived);
 
-              //resore costs of old chat
-              tempCosts = tempCosts + history.total_tokens;
-
           });
 
           this.isHistoryShown = false;
 
           this.messages.set(tempMessages);
-          this.costs.set(tempCosts);
 
           this.newMessageField?.nativeElement.focus();
 
 
+        },
+
+        //nothing was replaced yet, so stopping the bar is all there is to undo;
+        //DataService has already shown the "something went wrong" snackbar
+        error: () => {
+          this.progressMode.set(false);
         }
 
-      );
+      });
 
 
 
@@ -180,9 +198,6 @@ export class ChatComponent implements OnInit {
             ]
     ));
 
-    //reset costs
-    this.costs.set(0);
-
     //set timestamp for new chat
     this.started = Date.now().valueOf();
 
@@ -194,6 +209,12 @@ export class ChatComponent implements OnInit {
 
   //send message via backend to GPT model
   sendMessage(){
+
+    //(keydown.enter) calls this directly, so the disabled Send button alone
+    //does not stop a student with no budget left
+    if(this.budgetExhausted()){
+      return;
+    }
 
     //check if new message is not empty
     if(this.newMessage().trim()!=""){
@@ -213,9 +234,9 @@ export class ChatComponent implements OnInit {
       this.newMessage.set("");
 
       //send new message to backend
-      this.dataService.sendMessages(this.messages(), this.started).subscribe(
+      this.dataService.sendMessages(this.messages(), this.started).subscribe({
 
-        data => {
+        next: data => {
 
           //handle answer message and add message to chat
           let answerMessage = new Message();
@@ -227,36 +248,57 @@ export class ChatComponent implements OnInit {
           //template simply renders no chips.
           answerMessage.sources = data.sources;
 
-            this.messages.update(messages => ([
-              ...messages,
-              answerMessage
-            ]));
-
+          this.messages.update(messages => ([
+            ...messages,
+            answerMessage
+          ]));
 
           if(data.token_left<0){data.token_left = 0;}
 
+          //update the remaining budget - drives the 90% notice, nothing else is shown
+          this.student.update(student => ({
+            ...student,
+            token_left: data.token_left
+          }))
 
-            //update costs and limits
-            this.costs.update(costs => costs + data.costs);
+          //scroll to end of chat
+          this.scrollToEnd();
 
+          this.progressMode.set(false);
+
+        },
+
+        error: (err: unknown) => {
+
+          //The turn never happened, so take the unanswered message back out of
+          //the chat and hand its text back for a retry - left in, it would be
+          //resent next turn as a second user message the backend never stored.
+          //Removed by identity, not position: "New topic" may have replaced the
+          //list while the request was running. DataService has already shown
+          //the "something went wrong" snackbar.
+          this.messages.update(messages => messages.filter(m => m !== msg));
+
+          if(this.newMessage().trim()===""){
+            this.newMessage.set(msg.content);
+          }
+
+          this.progressMode.set(false);
+
+          //403 = refused before the model was called. The usual cause is a
+          //budget used up elsewhere (another tab), so re-read it from the
+          //backend instead of trusting the local copy; the budget notice then
+          //says why sending stopped.
+          if(err instanceof HttpErrorResponse && err.status===403){
+            this.dataService.getStudent().subscribe(fresh => {
               this.student.update(student => ({
                 ...student,
-                token_left: data.token_left
+                token_left: Math.max(fresh.token_left, 0),
+                token_limit: fresh.token_limit
               }))
+            });
+          }
 
-              //scroll to end of chat
-              this.scrollToEnd();
-
-              //show cost warning for long chats
-              if(this.messages().length>4){
-
-              this.snackBar.open("Hint: Longer dialogues cost more. If you don't need the previous prompt, start a new topic!", "", {
-                duration: 7000, panelClass: "customSnackBar"
-              });
-            }
-
-            this.progressMode.set(false);
-
+        }
 
       });
     }

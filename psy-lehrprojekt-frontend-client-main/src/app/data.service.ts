@@ -80,7 +80,9 @@ export class DataService {
         duration: 5000
       });
 
-      return throwError(() => new Error('Something bad happened; please try again later.'));
+      //rethrow the original response, not a generic Error: callers need the
+      //status (ChatComponent re-reads the budget on a 403)
+      return throwError(() => error);
     }
 
 

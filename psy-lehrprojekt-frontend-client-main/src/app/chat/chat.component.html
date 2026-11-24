@@ -1,12 +1,24 @@
 <main>
 
-  <mat-progress-bar style="margin-top: 10px" [mode]="progressMode()?'indeterminate':'determinate'" [value]="tokenLeft()"></mat-progress-bar>
+  <!-- Loading indicator only. It used to rest at the remaining budget; an empty
+       bar would now read as "budget gone" to anyone who knew the old screen, so
+       it is hidden while idle (hidden, not removed, so the page does not jump). -->
+  <mat-progress-bar style="margin-top: 10px" mode="indeterminate" [style.visibility]="progressMode()?'visible':'hidden'"></mat-progress-bar>
 
-  <div class="message-container">
-    <small [style.color]="student().token_left==0 || costs() > student().token_left?'red':''" >available credits: <br/> {{student().token_left}} of {{student().token_limit}}</small>
-
-    <small style="text-align: right">current topic costs: <br/>{{costs()}}</small>
-  </div>
+  <!-- The budget is hidden during the trial (see BUDGET_WARNING_PCT) and only
+       surfaces from 90% used on. -->
+  @if(budgetExhausted()){
+    <p class="budget-notice budget-exhausted">
+      <mat-icon>warning</mat-icon>
+      <span>Your StatsBot budget is used up. Kindly reach out to Akshay Lakhi: <a href="mailto:akshay.lakhi@univie.ac.at">akshay.lakhi&#64;univie.ac.at</a></span>
+    </p>
+  }
+  @else if(budgetWarning()){
+    <p class="budget-notice">
+      <mat-icon>warning</mat-icon>
+      <span>You have used {{budgetUsedPct()}}% of your StatsBot budget.</span>
+    </p>
+  }
 
 
       <div class="button-container">
@@ -94,10 +106,14 @@
 
       <mat-form-field appearance="outline">
         <mat-label>Your message</mat-label>
-        <textarea id="newMsg" matInput name="newMsg" #newMsg [(ngModel)]="newMessage" (keydown.enter)="sendMessage()"></textarea>
+        <!-- preventDefault: otherwise the browser inserts Enter's newline into the box
+             sendMessage() has just emptied, and every following message starts with
+             "\n" - stored that way in history.sent. keydown.enter only matches an
+             unmodified Enter, so Shift+Enter still breaks a line. -->
+        <textarea id="newMsg" matInput name="newMsg" #newMsg [(ngModel)]="newMessage" (keydown.enter)="$event.preventDefault(); sendMessage()"></textarea>
       </mat-form-field>
 
-       <button mat-fab extended [disabled]="newMsg.value=='' || student().token_left!<=0 ||costs() > student().token_left"(click)="sendMessage()">
+       <button mat-fab extended [disabled]="newMsg.value==='' || budgetExhausted()" (click)="sendMessage()">
         <mat-icon>send</mat-icon>
         Send
       </button>

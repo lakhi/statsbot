@@ -18,3 +18,26 @@
   padding: 1px 8px;
   white-space: nowrap;
 }
+
+/* Budget notice.
+   The only place the token budget appears during the trial, and only from 90%
+   used on - identical in both arms. */
+.budget-notice {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 1% 0;
+  font-size: 0.9em;
+  color: #8a5300;
+}
+
+.budget-notice mat-icon {
+  flex-shrink: 0;
+  font-size: 18px;
+  width: 18px;
+  height: 18px;
+}
+
+.budget-exhausted {
+  color: #c62828;
+}
