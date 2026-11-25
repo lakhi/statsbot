@@ -75,9 +75,13 @@ return [
     | Internal testing only. Lets the per-arm test URLs (/rag-pilot-test/salient/
     | etc.) pin the arm for a request, so one tester can try all three.
     |
-    | A pinned arm is REFUSED (403), not ignored, whenever this is false or the
-    | phase is 'study'. Ignoring it would quietly answer a tester under the wrong
-    | arm; honouring it in the study would let a student switch arms.
+    | A pinned arm is REFUSED (403), not ignored, unless this is true AND the
+    | phase is exactly 'test'. Ignoring it would quietly answer a tester under
+    | the wrong arm; honouring it anywhere else would let a student switch arms.
+    |
+    | This guards the stack it runs on, not the study: a test stack left up
+    | during the study is still reachable by every u:account Shibboleth admits.
+    | Lock it down or take it down at go-live.
     */
 
     'arm_override' => (bool) env('STUDY_ARM_OVERRIDE', false),

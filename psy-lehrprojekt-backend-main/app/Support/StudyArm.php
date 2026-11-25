@@ -52,7 +52,13 @@ final class StudyArm
             return $student->arm;
         }
 
-        if (! config('study.arm_override') || config('study.phase') === 'study') {
+        //EXACTLY 'test': 'off', 'study' and a misspelt phase all refuse. Not a
+        //check against 'study' - the pilot stack stays in 'test' even while the
+        //real study runs on another stack, so that check would never fire there.
+        //No per-uid allowlist: the test links go to the team only (decided
+        //2026-11-25), which is also why the pilot stack itself has to be locked
+        //down or taken down at go-live.
+        if (! config('study.arm_override') || config('study.phase') !== 'test') {
             abort(403, 'arm override is disabled');
         }
 

@@ -221,16 +221,82 @@ class AllocationTest extends TestCase
         $this->assertNotSame($openings['bachelor'], $openings['master']);
     }
 
-    public function test_reseeding_is_refused_while_students_still_hold_an_arm(): void
+    /** A student holding an arm with no claimed slot behind it. */
+    private function orphan(string $uid, string $arm): void
     {
-        // reseeding under them would leave allocated students in no slot at all
-        $this->seedSequence('bachelor', ['rag_salient']);
+        DB::table('students')->insert([
+            'uid' => $uid, 'firstname' => 'O', 'lastname' => 'Rphan',
+            'token_limit' => 100, 'token_left' => 7, 'activated' => 1, 'registered' => 1,
+            'arm' => $arm, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+    }
+
+    public function test_a_forced_reseed_releases_claims_and_orphans_first(): void
+    {
+        // the pod's state: two-arm claims, plus an arm a past --force reseed
+        // orphaned. Neither may block the reseed or survive it.
+        $this->seedSequence('bachelor', ['rag', 'no_rag']);
         $this->roster('u:one', 'bachelor');
         $this->register('u:one');
+        $this->orphan('u:orphan', 'rag');
+
+        $this->artisan('study:seed-test', ['--force' => true, '--with-unknown' => true])->assertSuccessful();
+
+        foreach (['u:one', 'u:orphan'] as $uid) {
+            $s = DB::table('students')->where('uid', $uid)->first();
+            $this->assertNull($s->arm, "$uid kept an arm");
+            $this->assertSame(0, (int) $s->registered, "$uid is not sent back through the disclaimer");
+            $this->assertSame((int) $s->token_limit, (int) $s->token_left);
+        }
+
+        $this->assertSame(0, DB::table('allocation_slot')->whereNotNull('claimed_uid')->count());
+        $this->assertSame(0, DB::table('allocation_slot')->where('arm', 'rag')->count(), 'old two-arm slots remain');
+        // bachelor 6 + master 6 + unknown 12
+        $this->assertSame(24, DB::table('allocation_slot')->where('phase', 'test')->count());
+    }
+
+    public function test_a_released_student_is_allocated_again_at_the_disclaimer(): void
+    {
+        $this->orphan('u:orphan', 'rag');
+        $this->artisan('study:seed-test', ['--force' => true, '--with-unknown' => true])->assertSuccessful();
+
+        // not on the roster -> unknown stratum, which --with-unknown seeded
+        $this->assertSame('rag_nonsalient', $this->armAfterRegistering('u:orphan'));
+    }
+
+    public function test_release_refuses_once_the_study_has_claimed_a_slot(): void
+    {
+        // on a stack that ran the study, "an arm with no test slot" is a real
+        // participant - nothing may be released there
+        $this->seedSequence('bachelor', ['rag_salient'], 'study');
+        DB::table('allocation_slot')->where('phase', 'study')->update(['claimed_uid' => 'u:real']);
+        $this->orphan('u:real', 'rag_salient');
 
         $this->artisan('study:seed-test', ['--force' => true])->assertFailed();
 
-        $this->assertSame('u:one', DB::table('allocation_slot')->value('claimed_uid'));
+        $_SERVER['uid'] = 'u:admin';
+        $this->postJson('/api/study/reset')->assertStatus(409);
+
+        $this->assertSame('rag_salient', DB::table('students')->where('uid', 'u:real')->value('arm'));
+    }
+
+    public function test_the_monitor_flags_a_claim_under_an_unconfigured_arm(): void
+    {
+        // 'rag' agrees with itself, so a plain comparison would call it ok while
+        // /messages answers that student as control
+        $this->seedSequence('bachelor', ['rag']);
+        $this->roster('u:one', 'bachelor');
+        $this->register('u:one');
+
+        $_SERVER['uid'] = 'u:admin';
+        $this->getJson('/api/study/monitor')
+            ->assertJsonPath('ledger.0.known_arm', false)
+            ->assertJsonPath('ledger.0.consistent', false)
+            ->assertJsonPath('buckets.bachelor.rag', 1);
+
+        $html = $this->get('/api/study/monitor?format=html')->assertOk()->getContent();
+        $this->assertStringContainsString('<th>rag (unknown)</th>', $html);
+        $this->assertStringContainsString('UNKNOWN ARM', $html);
     }
 
     public function test_reset_is_refused_outside_the_test_phase(): void

@@ -244,8 +244,13 @@ Route::post('/messages', function (Request $request) {
     $student->save();
 
     //No-RAG and non-salient responses have identical keys. `grounded` and the
-    //per-turn `costs` used to be here: the frontend reads neither, and both
-    //told a non-salient student in the network tab that retrieval was running.
+    //per-turn `costs` used to be here: the frontend reads neither, and both put
+    //retrieval in plain sight in the network tab.
+    //
+    //This does NOT make the cost invisible. token_left (here and on /student)
+    //still gives it as the difference of two turns, and RAG turns cost
+    //1.3-2.4x more. Accepted: reading it needs DevTools AND a baseline to
+    //compare against. Hiding it would mean a percentage-only budget API.
     $body = [
         'content' => $history->received,
         'token_left' => $student->token_left,
@@ -325,6 +330,11 @@ Route::get('/study/monitor', function (Request $request) {
         $buckets[$slot->stratum][$slot->arm] =
             ($buckets[$slot->stratum][$slot->arm] ?? 0) + 1;
 
+        //An arm that is not configured agrees with itself, so the comparison
+        //alone would call it 'ok' - while /messages quietly answers that student
+        //as control (e.g. the two-arm pilot's 'rag'). It is not ok.
+        $knownArm = StudyArm::known($slot->arm);
+
         $ledger[] = [
             'seq' => $slot->seq,
             'stratum' => $slot->stratum,
@@ -332,7 +342,8 @@ Route::get('/study/monitor', function (Request $request) {
             'uid' => $slot->claimed_uid,
             'claimed_at' => $slot->claimed_at,
             'student_arm' => $armByUid[$slot->claimed_uid] ?? null,
-            'consistent' => ($armByUid[$slot->claimed_uid] ?? null) === $slot->arm,
+            'known_arm' => $knownArm,
+            'consistent' => $knownArm && ($armByUid[$slot->claimed_uid] ?? null) === $slot->arm,
         ];
     }
 
@@ -362,14 +373,25 @@ Route::get('/study/monitor', function (Request $request) {
             e($r['arm']),
             e($r['uid']),
             e((string) $r['claimed_at']),
-            $r['consistent'] ? 'ok' : 'MISMATCH'
+            ! $r['known_arm'] ? 'UNKNOWN ARM' : ($r['consistent'] ? 'ok' : 'MISMATCH')
         );
+    }
+
+    //configured arms first, then any stale arm the slots still carry - a claim
+    //under an unconfigured arm must show up here, not vanish from the counts
+    $columns = $arms;
+    foreach ($buckets as $byArm) {
+        foreach (array_keys($byArm) as $arm) {
+            if (! in_array($arm, $columns, true)) {
+                $columns[] = $arm;
+            }
+        }
     }
 
     $counts = '';
     foreach ($buckets as $stratum => $byArm) {
         $cells = '';
-        foreach ($arms as $arm) {
+        foreach ($columns as $arm) {
             $cells .= '<td>'.(int) ($byArm[$arm] ?? 0).'</td>';
         }
         $counts .= sprintf(
@@ -379,7 +401,10 @@ Route::get('/study/monitor', function (Request $request) {
             $remaining[$stratum] ?? 0
         );
     }
-    $armHeaders = implode('', array_map(fn ($a) => '<th>'.e($a).'</th>', $arms));
+    $armHeaders = implode('', array_map(
+        fn ($a) => '<th>'.e($a).(StudyArm::known($a) ? '' : ' (unknown)').'</th>',
+        $columns
+    ));
 
     return response(
         '<!doctype html><meta charset="utf-8"><title>StatsBot allocation</title>'
@@ -409,32 +434,12 @@ Route::post('/study/reset', function (Request $request) {
         abort(403, 'reset is only available in the test phase');
     }
 
-    $uids = DB::table('allocation_slot')
-        ->where('phase', 'test')
-        ->whereNotNull('claimed_uid')
-        ->pluck('claimed_uid')
-        ->all();
-
-    DB::transaction(function () use ($uids) {
-        DB::table('allocation_slot')
-            ->where('phase', 'test')
-            ->update(['claimed_uid' => null, 'claimed_at' => null, 'updated_at' => now()]);
-
-        if ($uids !== []) {
-            //registered = 0 is what sends them back through the disclaimer,
-            //which is what triggers the next claim. history rows are left alone
-            //on purpose: arm is stamped per row, so earlier runs stay readable.
-            DB::table('students')
-                ->whereIn('uid', $uids)
-                ->update([
-                    'arm' => null,
-                    'allocated_at' => null,
-                    'registered' => 0,
-                    'token_left' => DB::raw('token_limit'),
-                    'updated_at' => now(),
-                ]);
-        }
-    });
+    //same release `study:seed-test --force` performs - see Allocator
+    try {
+        $uids = Allocator::releaseTestPhase();
+    } catch (\RuntimeException $e) {
+        abort(409, $e->getMessage());
+    }
 
     return response()->json(['released' => count($uids), 'uids' => $uids]);
 });

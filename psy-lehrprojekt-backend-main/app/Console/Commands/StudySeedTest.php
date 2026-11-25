@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Services\Allocator;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 
@@ -22,7 +23,7 @@ use Illuminate\Support\Facades\DB;
 class StudySeedTest extends Command
 {
     protected $signature = 'study:seed-test
-        {--force : reseed even if test slots already exist}
+        {--force : reseed even if test slots already exist; releases every test allocation first}
         {--with-unknown : also seed the unknown stratum, for testers not on the roster}';
 
     protected $description = 'Seed the test-phase allocation sequence';
@@ -54,18 +55,34 @@ class StudySeedTest extends Command
             return self::FAILURE;
         }
 
-        //Reseeding under students who still hold an arm would leave them in no
-        //slot at all - POST /study/reset first, which releases slots AND arms.
-        $held = DB::table('students')->whereNotNull('arm')->count();
-        if ($held > 0) {
-            $this->error("$held students still hold an arm - run POST /study/reset first.");
+        $sequences = self::SEQUENCES;
+        if ($this->option('with-unknown')) {
+            $sequences[(string) config('study.unknown_stratum')] = self::UNKNOWN;
+        }
+
+        //An unconfigured arm would be claimed and then answered as control in
+        //silence (StudyArm's fallback). Refuse it here, where it is cheap.
+        $unknown = array_diff(array_merge(...array_values($sequences)), array_keys(config('study.arms')));
+        if ($unknown !== []) {
+            $this->error('not configured in study.arms: '.implode(', ', array_unique($unknown)));
 
             return self::FAILURE;
         }
 
-        $sequences = self::SEQUENCES;
-        if ($this->option('with-unknown')) {
-            $sequences[(string) config('study.unknown_stratum')] = self::UNKNOWN;
+        //Release BEFORE reseeding: deleting claimed rows under students who still
+        //hold an arm would leave them allocated to a slot that no longer exists.
+        //Doing it here, rather than requiring POST /study/reset first, makes the
+        //pod procedure one artisan line.
+        try {
+            $released = Allocator::releaseTestPhase();
+        } catch (\RuntimeException $e) {
+            $this->error($e->getMessage());
+
+            return self::FAILURE;
+        }
+
+        if ($released !== []) {
+            $this->line('released (back to the disclaimer): '.implode(', ', $released));
         }
 
         DB::transaction(function () use ($sequences) {

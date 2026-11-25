@@ -42,6 +42,23 @@ class TutorPromptTest extends TestCase
         $this->assertStringContainsString('hyptest-003', $out[$last - 1]['content']);
     }
 
+    public function test_excerpts_reach_the_model_as_id_and_text_only(): void
+    {
+        // a title or slide number in front of the model, in BOTH RAG arms, would
+        // leave only the prompt keeping "Vorlesung 14" out of a non-salient answer
+        $hits = $this->hits();
+        $hits[0]['heading'] = 'Vorlesung 14 › Voraussetzungen';
+        $hits[0]['doc_title'] = 'Vorlesung 14: t-Test I';
+        $hits[0]['label'] = 'Vorlesung 14: t-Test I, Folie 12';
+
+        $out = TutorPrompt::assemble([['role' => 'user', 'content' => 'q']], $hits, true);
+        $materials = $out[1]['content'];
+
+        $this->assertStringContainsString("[hyptest-003]\n## 2 p-Values ...", $materials);
+        $this->assertStringNotContainsString('Vorlesung', $materials);
+        $this->assertStringNotContainsString('Folie', $materials);
+    }
+
     public function test_the_two_arms_differ_by_exactly_the_materials_block(): void
     {
         $control = TutorPrompt::systemPrompt(false);

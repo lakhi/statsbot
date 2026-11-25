@@ -44,7 +44,8 @@ return new class extends Migration
             //position within this phase+stratum sequence, 1-based.
             $table->unsignedInteger('seq');
 
-            //'rag' | 'no_rag'. Pre-seeded and never written again.
+            //a key of config('study.arms') - 'no_rag' | 'rag_nonsalient' | 'rag_salient'
+            //(the two-arm pilot used 'rag' | 'no_rag'). Pre-seeded and never written again.
             $table->string('arm');
 
             $table->string('claimed_uid')->nullable();

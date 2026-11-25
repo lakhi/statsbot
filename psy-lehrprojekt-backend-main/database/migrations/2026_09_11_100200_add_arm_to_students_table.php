@@ -18,7 +18,8 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('students', function (Blueprint $table) {
-            //'rag' | 'no_rag', null until allocated
+            //a key of config('study.arms') - 'no_rag' | 'rag_nonsalient' | 'rag_salient'
+            //(the two-arm pilot used 'rag' | 'no_rag') - null until allocated
             $table->string('arm')->nullable()->after('registered');
             $table->timestamp('allocated_at')->nullable()->after('arm');
         });

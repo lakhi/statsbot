@@ -128,4 +128,66 @@ class Allocator
             return $slot->arm;
         });
     }
+
+    /**
+     * Undo every test-phase allocation so the rehearsal can run again. Used by
+     * POST /study/reset and by `study:seed-test --force`.
+     *
+     * Releases two kinds of student: those holding a claimed test slot, and
+     * ORPHANS - an arm with no claimed slot behind it, which is what a reseed
+     * that deleted claimed rows used to leave. Missing the orphans is how a
+     * reseed guard could refuse forever. Each one goes back through the
+     * disclaimer (registered = 0), which is what triggers the next claim.
+     * history rows are left alone on purpose: arm is stamped per row, so
+     * earlier runs stay readable.
+     *
+     * Refuses outright once any STUDY slot is claimed. On a stack that has run
+     * the study, "an arm with no test slot" describes a real participant.
+     *
+     * @return array<int,string> the released uids
+     *
+     * @throws \RuntimeException
+     */
+    public static function releaseTestPhase(): array
+    {
+        return DB::transaction(function () {
+            if (DB::table('allocation_slot')->where('phase', 'study')->whereNotNull('claimed_uid')->exists()) {
+                throw new \RuntimeException('study allocations exist on this stack - refusing to release anything');
+            }
+
+            $claimed = DB::table('allocation_slot')
+                ->where('phase', 'test')
+                ->whereNotNull('claimed_uid')
+                ->pluck('claimed_uid')
+                ->all();
+
+            $orphans = DB::table('students')
+                ->whereNotNull('arm')
+                ->whereNotIn('uid', $claimed)
+                ->pluck('uid')
+                ->all();
+
+            $uids = array_values(array_unique(array_merge($claimed, $orphans)));
+
+            DB::table('allocation_slot')
+                ->where('phase', 'test')
+                ->update(['claimed_uid' => null, 'claimed_at' => null, 'updated_at' => now()]);
+
+            if ($uids !== []) {
+                DB::table('students')
+                    ->whereIn('uid', $uids)
+                    ->update([
+                        'arm' => null,
+                        'allocated_at' => null,
+                        'registered' => 0,
+                        'token_left' => DB::raw('token_limit'),
+                        'updated_at' => now(),
+                    ]);
+            }
+
+            Log::info('Allocator: test phase released', ['claimed' => count($claimed), 'orphans' => count($orphans)]);
+
+            return $uids;
+        });
+    }
 }

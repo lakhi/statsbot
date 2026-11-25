@@ -95,12 +95,13 @@ class TutorPrompt
             '',
         ];
 
+        //The id and the text, nothing else. Titles, lecture and slide numbers
+        //would put "Vorlesung 14" in front of the model in BOTH RAG arms, leaving
+        //the prompt instruction as the only thing that keeps it out of a
+        //non-salient answer. The salient arm loses nothing: its chips are looked
+        //up from the hit by id (parse()), never taken from the model.
         foreach ($hits as $h) {
-            $pages = $h['page_start'] === $h['page_end']
-                ? "p. {$h['page_start']}"
-                : "pp. {$h['page_start']}-{$h['page_end']}";
-
-            $lines[] = "[{$h['id']}] {$h['heading']} — {$h['doc_title']}, {$pages}";
+            $lines[] = "[{$h['id']}]";
             $lines[] = $h['text'];
             $lines[] = '';
         }

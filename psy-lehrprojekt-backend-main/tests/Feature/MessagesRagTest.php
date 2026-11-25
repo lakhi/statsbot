@@ -522,6 +522,23 @@ class MessagesRagTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_a_pinned_arm_needs_exactly_the_test_phase(): void
+    {
+        // the gate is "phase IS test", not "phase is not study": a stack in 'off'
+        // or with a misspelt phase must refuse too
+        $this->seedStudent(10000, 'no_rag');
+        $this->fakeAzure(['answer' => 'a', 'citations' => []]);
+
+        foreach (['off', 'Study', 'TEST', ''] as $phase) {
+            config(['study.arm_override' => true, 'study.phase' => $phase]);
+
+            $this->ask('what is a p-value?', ['test_arm' => 'rag_salient'])
+                ->assertStatus(403, "phase '$phase' must refuse a pinned arm");
+        }
+
+        Http::assertNothingSent();
+    }
+
     public function test_an_unknown_pinned_arm_is_rejected(): void
     {
         config(['study.arm_override' => true]);

@@ -90,6 +90,13 @@ question. So each chunk in the index JSON should carry it:
 - Optional for backwards compatibility: without it, `KbRetriever` falls back to
   `"<heading chain>, p. <page_start>"`, which is what the hyptest pilot index shows.
 
+**Chunk `text` must not name its source.** The model sees each excerpt as `[id]` plus its
+text, and nothing else, in BOTH RAG arms. So strip running headers and footers that
+identify the document ("Vorlesung 14 | Folie 12", course name, lecturer, page numbers).
+Keep the slide's own title, which is content. Otherwise the model is handed "Vorlesung 14"
+in the non-salient arm too, and only a prompt instruction stops it from writing "wie in
+Vorlesung 14 gezeigt". The citation belongs in `citation`, which never reaches the model.
+
 ## Things that are non-obvious and were learned the hard way
 
 **Default docling is worse than `pdftotext` for maths.** It detects formula regions
