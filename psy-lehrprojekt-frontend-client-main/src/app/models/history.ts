@@ -1,3 +1,5 @@
+import { Source } from './source';
+
 export class History{
 
   id!: number;
@@ -7,12 +9,13 @@ export class History{
   //received message from GTP via backend
   received!: string;
 
-  //sum of tokens for message + response
-  total_tokens!: number;
-
   //timestamp start of a chat session
   started!: number;
 
   created_at!: Date;
+
+  //thread view only: what a salient-arm answer showed under it, replayed from
+  //history.sources_shown. Absent for every other row.
+  sources?: Source[];
 
 }

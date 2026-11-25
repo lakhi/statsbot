@@ -129,7 +129,7 @@ describe('ChatComponent', () => {
       component.newMessage.set('What is a p-value?');
       component.sendMessage();
       httpMock.expectOne(r => r.url.endsWith('messages'))
-        .flush({ content: 'An answer', sources: [], grounded: false, token_left: 40000, costs: 20000 });
+        .flush({ content: 'An answer', token_left: 40000 });
       fixture.detectChanges();
 
       expect(notice()).toContain('92%');
@@ -177,7 +177,7 @@ describe('ChatComponent', () => {
       expect(enter.defaultPrevented).toBeTrue();
       const req = httpMock.expectOne(r => r.url.endsWith('messages'));
       expect(req.request.body.messages.at(-1).content).toBe('What is a p-value?');
-      req.flush({ content: 'An answer', sources: [], grounded: false, token_left: 490000, costs: 10000 });
+      req.flush({ content: 'An answer', token_left: 490000 });
     });
 
     it('leaves Shift+Enter alone, so students can still break a line', async () => {
@@ -192,7 +192,81 @@ describe('ChatComponent', () => {
     });
   });
 
+  describe('sources (the only difference between the RAG arms)', () => {
+
+    function answer(body: object) {
+      render(500000, 500000);
+      spyOn(component, 'scrollToEnd');
+      component.newMessage.set('When do I use a t-test?');
+      component.sendMessage();
+      httpMock.expectOne(r => r.url.endsWith('messages')).flush(body);
+      fixture.detectChanges();
+    }
+
+    function chips(): string[] {
+      return Array.from(fixture.nativeElement.querySelectorAll('.source-chip'))
+        .map(el => (el as HTMLElement).textContent!.replace('description', '').trim());
+    }
+
+    function hasNote(): boolean {
+      return fixture.nativeElement.querySelector('.sources-none') !== null;
+    }
+
+    it('salient: shows a chip per cited source', () => {
+      answer({ content: 'Use it to compare two means.', token_left: 1,
+        sources: [{ id: 'v14-012', label: 'Vorlesung 14: t-Test I, Folie 12' },
+                  { id: 'k23-4', label: 'Klausur 2023, Aufgabe 4' }] });
+
+      expect(chips()).toEqual(['Vorlesung 14: t-Test I, Folie 12', 'Klausur 2023, Aufgabe 4']);
+      expect(hasNote()).toBeFalse();
+    });
+
+    it('salient: says so when the answer cites no course material', () => {
+      answer({ content: 'Use it to compare two means.', token_left: 1, sources: [] });
+
+      expect(chips()).toEqual([]);
+      expect(hasNote()).toBeTrue();
+      expect(fixture.nativeElement.querySelector('.sources-none').textContent)
+        .toContain('No matching course material found');
+    });
+
+    it('no-RAG and non-salient: no chip, no note, nothing that hints at a source', () => {
+      answer({ content: 'Use it to compare two means.', token_left: 1 });
+
+      expect(chips()).toEqual([]);
+      expect(hasNote()).toBeFalse();
+      expect(fixture.nativeElement.textContent).not.toMatch(/source|course material|Quelle/i);
+    });
+
+    it('shows students no test tag', () => {
+      render(500000, 500000);
+      expect(fixture.nativeElement.querySelector('.test-arm-tag')).toBeNull();
+    });
+  });
+
   describe('loading an old thread', () => {
+
+    it('replays the sources each answer showed live', () => {
+      render(500000, 500000);
+      component.loadThread(1700000000000);
+
+      httpMock.expectOne(r => r.url.endsWith('history/1700000000000')).flush([
+        { id: 1, sent: 'q1', received: 'a1', started: 1700000000000, created_at: '2026-11-25' },
+        { id: 2, sent: 'q2', received: 'a2', started: 1700000000000, created_at: '2026-11-25',
+          sources: [{ id: 'v14-012', label: 'Vorlesung 14: t-Test I, Folie 12' }] },
+        { id: 3, sent: 'q3', received: 'a3', started: 1700000000000, created_at: '2026-11-25', sources: [] },
+      ]);
+      fixture.detectChanges();
+
+      const answers = component.messages().filter(m => m.role === 'assistant').slice(1);
+      expect(answers.map(m => m.sources)).toEqual([
+        undefined,
+        [{ id: 'v14-012', label: 'Vorlesung 14: t-Test I, Folie 12' }],
+        [],
+      ]);
+      expect(fixture.nativeElement.querySelectorAll('.source-chip').length).toBe(1);
+      expect(fixture.nativeElement.querySelectorAll('.sources-none').length).toBe(1);
+    });
 
     it('stops loading when the request fails', () => {
       render(500000, 500000);

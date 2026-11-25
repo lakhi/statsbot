@@ -2,20 +2,19 @@ import { Source } from './source';
 
 //Response of POST /messages.
 //
-//The tutor writes ONE coherent answer. `sources` are the passages it declared
-//it drew on - kept as a separate field so grounding stays measurable even
-//though the prose is unified. `sources` is empty in the no-rag arm, and also in
-//the rag arm whenever nothing cleared the similarity floor.
+//The tutor writes ONE coherent answer, and the text is the same in every arm.
+//The arms differ only in `sources`, and the frontend never needs to know the
+//arm - it renders whatever shape arrives:
+//
+//  absent  -> nothing (no-RAG and non-salient RAG, which look identical)
+//  []      -> the salient arm's "No matching course material found" note
+//  [...]   -> the salient arm's citation chips (at most 3)
 export class Answer{
 
     content!: string;
 
-    //passages the answer cited; empty when it cited none
-    sources!: Source[];
-
-    grounded!: boolean;
+    sources?: Source[];
 
     token_left!: number;
-    costs!: number;
 
 }

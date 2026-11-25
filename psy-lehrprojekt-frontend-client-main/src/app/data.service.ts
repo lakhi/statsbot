@@ -7,6 +7,7 @@ import { Answer } from './models/answer';
 import { Student } from './models/student';
 import { History } from './models/history';
 import { MatSnackBar } from '@angular/material/snack-bar';
+import { TestArm, testArmFromPath } from './test-arm';
 
 
 @Injectable({
@@ -15,6 +16,9 @@ import { MatSnackBar } from '@angular/material/snack-bar';
 export class DataService {
 
   url = environment.url;
+
+  //arm pinned by an internal test URL; null everywhere else, always on the live build
+  testArm: TestArm | null = testArmFromPath(window.location.pathname);
 
   constructor(private http: HttpClient, private snackBar: MatSnackBar) {
 
@@ -45,11 +49,16 @@ export class DataService {
       let messagesToSend = [...messages];
       messagesToSend.shift();
 
-      //only role + content go to the backend; the two-layer fields on assistant
-      //turns are display state and would fail the route's validation
+      //only role + content go to the backend; `sources` on assistant turns is
+      //display state and would fail the route's validation
       const payload = messagesToSend.map(m => ({role: m.role, content: m.content}));
 
-      return this.http.post<Answer>(this.url+"messages", {"messages": payload, "started": started}).pipe(
+      const body: {messages: typeof payload, started: number, test_arm?: string} = {"messages": payload, "started": started};
+      if(this.testArm){
+        body.test_arm = this.testArm.arm;
+      }
+
+      return this.http.post<Answer>(this.url+"messages", body).pipe(
         catchError(this.handleError)
       );
 

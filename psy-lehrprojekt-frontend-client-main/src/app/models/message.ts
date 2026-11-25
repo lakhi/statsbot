@@ -5,9 +5,9 @@ export class Message{
   role?: "assistant" | "user";
   content = "";
 
-  //Present only on assistant turns that came from a live /messages call.
-  //Messages restored from history carry `content` alone, and render without
-  //source chips.
+  //Assistant turns only, with the same three states as Answer.sources:
+  //absent = render nothing, [] = the "no matching course material" note,
+  //non-empty = chips. Restored threads replay what was shown live.
   sources?: Source[];
 
 }

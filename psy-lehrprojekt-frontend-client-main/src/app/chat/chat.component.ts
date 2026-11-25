@@ -15,6 +15,7 @@ import { Student } from '../models/student';
 import {MatSidenavModule} from '@angular/material/sidenav';
 import { DatePipe } from '@angular/common';
 import { HttpErrorResponse } from '@angular/common/http';
+import { TestArm } from '../test-arm';
 
 //Share of the token budget used before the student is told about it at all.
 //The budget is otherwise hidden during the trial: every turn resends the whole
@@ -76,6 +77,11 @@ export class ChatComponent implements OnInit {
 
   constructor(private dataService: DataService){
 
+  }
+
+  //which condition an internal test URL pinned, for the tester's tag; null for students
+  get testArm(): TestArm | null {
+    return this.dataService.testArm;
   }
 
   ngOnInit(): void {
@@ -153,6 +159,8 @@ export class ChatComponent implements OnInit {
               let messageReceived = new Message();
               messageReceived.content = history.received;
               messageReceived.role = "assistant";
+              //replays what this answer showed live (salient rows only)
+              messageReceived.sources = history.sources;
               tempMessages.push(messageReceived);
 
           });
@@ -243,9 +251,7 @@ export class ChatComponent implements OnInit {
           answerMessage.content = data.content;
           answerMessage.role = "assistant";
 
-          //passages the answer declared it drew on; empty in the no-rag arm and
-          //whenever nothing cleared the similarity floor, in which case the
-          //template simply renders no chips.
+          //absent, [] or chips - rendered as-is; see models/answer.ts
           answerMessage.sources = data.sources;
 
           this.messages.update(messages => ([

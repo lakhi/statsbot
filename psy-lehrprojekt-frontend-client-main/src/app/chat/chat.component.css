@@ -1,22 +1,53 @@
-/* Source chips.
-   Shown under an answer that cited course passages, so a student can see which
-   parts of their own materials the tutor drew on. Absent entirely in the no-rag
-   arm - there is nothing to cite - and absent in the rag arm on turns where
-   nothing cleared the similarity floor. */
+/* Source chips - salient RAG arm only.
+   The manipulation itself: they make it visible that an answer draws on the
+   student's own course materials, so they are meant to be noticed (amber, as in
+   the study's condition graphic). The no-RAG and non-salient arms never render
+   any of this. */
 .sources {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 6px;
+  gap: 6px;
+  margin-top: 8px;
 }
 
 .source-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: 0.9em;
-  color: #0063a6;
-  background-color: #e3edf6;
-  border-radius: 10px;
-  padding: 1px 8px;
-  white-space: nowrap;
+  font-weight: 500;
+  color: #5c3b00;
+  background-color: #fdf3dc;
+  border: 1px solid #e6a100;
+  border-radius: 8px;
+  padding: 2px 8px;
+}
+
+/* Salient arm, answer cited nothing: says so, quietly. */
+.sources-none {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+  font-size: 0.85em;
+  color: #6b6b6b;
+}
+
+.source-chip mat-icon,
+.sources-none mat-icon {
+  flex-shrink: 0;
+  font-size: 16px;
+  width: 16px;
+  height: 16px;
+}
+
+/* Internal test URLs only. */
+.test-arm-tag {
+  margin: 8px 1% 0;
+  font-size: 0.8em;
+  color: #6b6b6b;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 /* Budget notice.

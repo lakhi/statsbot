@@ -21,6 +21,11 @@
   }
 
 
+  <!-- Internal test URLs only (/rag-pilot-test/salient/ etc.); students never see it. -->
+  @if(testArm){
+    <p class="test-arm-tag">Test &middot; {{testArm.label}}</p>
+  }
+
       <div class="button-container">
         <button class="button" (click)="showHistory()" mat-raised-button><mat-icon>history</mat-icon>History</button>&nbsp;
         <button class="button"(click)="newTopic()" mat-raised-button><mat-icon>edit_document</mat-icon>New topic</button>&nbsp;
@@ -74,11 +79,10 @@
     </mat-card-header>
     <mat-card-content>
 
-    <!-- One coherent answer. Live replies additionally carry `sources`; turns
-         restored from history carry `content` alone and simply render without
-         chips. Tutor answers are Markdown with LaTeX maths and get rendered (see
-         RichTextPipe); student messages stay plain text, so nothing a student
-         types is ever interpreted as HTML - trimmed, as the old wrapper did. -->
+    <!-- One coherent answer, the same text in every arm. Tutor answers are
+         Markdown with LaTeX maths and get rendered (see RichTextPipe); student
+         messages stay plain text, so nothing a student types is ever interpreted
+         as HTML - trimmed, as the old wrapper did. -->
     @if(msg.role==="assistant"){
       <div class="rich-text" [innerHTML]="msg.content | richText"></div>
     }
@@ -86,12 +90,20 @@
       <div style="white-space:pre-wrap;">{{msg.content.trim()}}</div>
     }
 
-    @if(msg.sources?.length){
-      <div class="sources">
-        @for(source of msg.sources; track source.id){
-          <span class="source-chip">{{source.heading}} &middot; p.&nbsp;{{source.page_start}}</span>
-        }
-      </div>
+    <!-- The ONLY difference between the RAG arms. No `sources` (no-RAG and
+         non-salient): nothing at all. Salient: the cited course material, or a
+         note when the answer cites none. See models/answer.ts. -->
+    @if(msg.sources){
+      @if(msg.sources.length){
+        <div class="sources">
+          @for(source of msg.sources; track source.id){
+            <span class="source-chip"><mat-icon>description</mat-icon>{{source.label}}</span>
+          }
+        </div>
+      }
+      @else{
+        <div class="sources-none"><mat-icon>search_off</mat-icon>No matching course material found</div>
+      }
     }
 
     </mat-card-content>
