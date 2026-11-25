@@ -172,17 +172,30 @@ AZURE_EMBED_DIMENSIONS=3072
 AZURE_EMBED_TIMEOUT=10
 
 TUTOR_STRUCTURED_OUTPUT=true
+# Salient arm: at most this many citation chips per answer (preregistered: 3).
+TUTOR_MAX_CITATIONS=3
 
 # Small budget so a runaway test cannot spend much.
 TOKEN_LIMIT=200000
 
-# A/B trial. 'test' enables allocation against the test sequence and unlocks
-# the reset endpoint; 'off' disables allocation entirely.
+# Three-arm trial. 'test' enables allocation against the test sequence and
+# unlocks the reset endpoint; 'off' disables allocation entirely.
 STUDY_PHASE=test
 STUDY_ADMIN_UIDS=lakhia92,abhag93
+# Lets /rag-pilot-test/<no-rag|non-salient|salient>/ pin the arm per message.
+# Test stack only: the backend refuses it whenever STUDY_PHASE=study.
+STUDY_ARM_OVERRIDE=true
 ENV
   chmod 600 "$APP/.env"
 fi
+
+# The template above is only written on a FIRST install; a redeploy keeps the old
+# .env. Say so when it predates a key this release relies on, instead of letting
+# the per-arm test URLs fail later as an unexplained 403.
+for key in STUDY_ARM_OVERRIDE TUTOR_MAX_CITATIONS; do
+  grep -q "^${key}=" "$APP/.env" \
+    || log "NOTE: pilot .env has no ${key} — add it by hand (see .env.example)"
+done
 
 chmod -R ug+rwX "$APP" "$API_PUB" "$WEB"
 chmod -R ug+rwX "$APP/storage" "$APP/bootstrap/cache"
@@ -240,6 +253,11 @@ cat <<EOF
 
 Open:  https://statsbot.univie.ac.at/rag-pilot-test/
 Live:  https://statsbot.univie.ac.at/            (unchanged)
+
+Per-arm test URLs:
+  https://statsbot.univie.ac.at/rag-pilot-test/no-rag/
+  https://statsbot.univie.ac.at/rag-pilot-test/non-salient/
+  https://statsbot.univie.ac.at/rag-pilot-test/salient/
 
 Toggle retrieval without redeploying (config is not cached):
   sed -i 's/^RAG_ENABLED=.*/RAG_ENABLED=true/'  $APP/.env

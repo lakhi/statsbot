@@ -142,6 +142,17 @@ HTA
 
 cp -R "$FRONTEND_DIR/$BUILD_OUT"/. "$stage/frontend/"
 
+# Per-arm test URLs for internal testing: /rag-pilot-test/<slug>/ serves the same
+# app, and the rag-pilot build reads the slug to pin the arm (src/app/test-arm.ts).
+# Plain copies of index.html, so no Apache rewrite is involved - the base href
+# /rag-pilot-test/ still resolves every asset from the parent directory.
+TEST_SLUGS="no-rag non-salient salient"
+for slug in $TEST_SLUGS; do
+  mkdir -p "$stage/frontend/$slug"
+  cp "$stage/frontend/index.html" "$stage/frontend/$slug/index.html"
+done
+echo "==> Test URL folders staged: $TEST_SLUGS"
+
 tgz="$work/$ASSET"
 COPYFILE_DISABLE=1 tar --no-mac-metadata -czf "$tgz" -C "$stage" . 2>/dev/null \
   || tar -czf "$tgz" -C "$stage" .
@@ -173,5 +184,10 @@ Next: apply it on the pod.
 
  (First time only, install the deploy script first — see
   scripts/rag-pilot-deploy.sh header.)
+
+Per-arm test URLs (need STUDY_ARM_OVERRIDE=true in the pilot .env):
+    https://statsbot.univie.ac.at/rag-pilot-test/no-rag/
+    https://statsbot.univie.ac.at/rag-pilot-test/non-salient/
+    https://statsbot.univie.ac.at/rag-pilot-test/salient/
 ────────────────────────────────────────────────────────────────────────
 EOF
