@@ -93,6 +93,30 @@ class KbRetrieverTest extends TestCase
         $this->assertSame(2, $hits[0]['page_start']);
     }
 
+    public function test_the_label_is_the_chunks_citation_when_the_pipeline_wrote_one(): void
+    {
+        $this->writeIndex([[1, 0, 0]]);
+        $meta = json_decode(file_get_contents($this->base.'.json'), true);
+        $meta['chunks'][0]['citation'] = 'Vorlesung 14: t-Test I, Folie 12';
+        file_put_contents($this->base.'.json', json_encode($meta));
+        $this->fakeQueryVector([1, 0, 0]);
+
+        $hits = (new KbRetriever)->search('anything');
+
+        $this->assertSame('Vorlesung 14: t-Test I, Folie 12', $hits[0]['label']);
+    }
+
+    public function test_an_index_without_citations_falls_back_to_heading_and_page(): void
+    {
+        // the hyptest pilot index predates the citation field
+        $this->writeIndex([[1, 0, 0]]);
+        $this->fakeQueryVector([1, 0, 0]);
+
+        $hits = (new KbRetriever)->search('anything');
+
+        $this->assertSame('Section 0, p. 1', $hits[0]['label']);
+    }
+
     public function test_chunks_below_the_similarity_floor_are_dropped(): void
     {
         // Only the second chunk clears 0.35; the orthogonal ones score 0.

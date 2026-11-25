@@ -172,9 +172,11 @@ class KbRetriever
 
         foreach (array_slice($scores, 0, (int) config('tutor.top_k'), true) as $i => $score) {
             $chunk = $this->meta['chunks'][$i];
+            $heading = implode(' › ', $chunk['heading_chain'] ?: [$chunk['doc_title']]);
             $hits[] = [
                 'id' => $chunk['id'],
-                'heading' => implode(' › ', $chunk['heading_chain'] ?: [$chunk['doc_title']]),
+                'heading' => $heading,
+                'label' => self::label($chunk, $heading),
                 'doc_title' => $chunk['doc_title'],
                 'page_start' => $chunk['page_start'],
                 'page_end' => $chunk['page_end'],
@@ -184,6 +186,23 @@ class KbRetriever
         }
 
         return $hits;
+    }
+
+    /**
+     * The citation a salient-arm student sees, e.g. "Vorlesung 14: t-Test I, Folie 12".
+     *
+     * The ingestion pipeline writes it per chunk as `citation`, because only it
+     * knows what a page IS - a slide, a handout page, an exam question. Indexes
+     * built before that field existed (the hyptest pilot) fall back to heading
+     * and page.
+     *
+     * @param  array<string,mixed>  $chunk
+     */
+    private static function label(array $chunk, string $heading): string
+    {
+        $citation = trim((string) ($chunk['citation'] ?? ''));
+
+        return $citation !== '' ? $citation : $heading.', p. '.$chunk['page_start'];
     }
 
     /** @param array<int,float> $v

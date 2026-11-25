@@ -13,6 +13,7 @@ class TutorPromptTest extends TestCase
         return [[
             'id' => 'hyptest-003',
             'heading' => '2 p-Values',
+            'label' => '2 p-Values, p. 2',
             'doc_title' => 'Lecture Notes: Hypothesis Testing',
             'page_start' => 2,
             'page_end' => 2,
@@ -106,9 +107,59 @@ class TutorPromptTest extends TestCase
         $this->assertSame('A p-value is P(T >= c | H0).', $parsed['answer']);
         $this->assertCount(1, $parsed['sources']);
         $this->assertSame('hyptest-003', $parsed['sources'][0]['id']);
-        $this->assertSame(2, $parsed['sources'][0]['page_start']);
-        $this->assertStringContainsString('A p-value is', $parsed['content']);
-        $this->assertStringContainsString('2 p-Values', $parsed['content']);
+        $this->assertSame('2 p-Values, p. 2', $parsed['sources'][0]['label']);
+    }
+
+    public function test_the_answer_text_never_carries_its_sources(): void
+    {
+        // the salient and non-salient arms differ ONLY in whether sources are
+        // displayed; a source line in the prose would show them in both
+        $parsed = TutorPrompt::parse(json_encode([
+            'answer' => 'A p-value is P(T >= c | H0).',
+            'citations' => ['hyptest-003'],
+        ]), $this->hits());
+
+        $this->assertSame('A p-value is P(T >= c | H0).', $parsed['answer']);
+        $this->assertArrayNotHasKey('content', $parsed);
+    }
+
+    public function test_display_sources_dedupes_by_label_orders_by_score_and_caps(): void
+    {
+        config(['tutor.max_citations' => 3]);
+
+        $shown = TutorPrompt::displaySources([
+            ['id' => 'a', 'label' => 'Vorlesung 2, Folie 3', 'score' => 0.40],
+            ['id' => 'b', 'label' => 'Vorlesung 14, Folie 12', 'score' => 0.61],
+            ['id' => 'c', 'label' => 'Vorlesung 14, Folie 12', 'score' => 0.58],
+            ['id' => 'd', 'label' => 'Klausur 2023, Aufgabe 4', 'score' => 0.52],
+            ['id' => 'e', 'label' => 'Übung 5, Aufgabe 1', 'score' => 0.37],
+        ]);
+
+        // the duplicate slide does not use up a slot: three DISTINCT labels
+        $this->assertSame([
+            ['id' => 'b', 'label' => 'Vorlesung 14, Folie 12'],
+            ['id' => 'd', 'label' => 'Klausur 2023, Aufgabe 4'],
+            ['id' => 'a', 'label' => 'Vorlesung 2, Folie 3'],
+        ], $shown);
+    }
+
+    public function test_display_sources_respects_a_lower_cap_and_never_leaks_scores(): void
+    {
+        config(['tutor.max_citations' => 1]);
+
+        $shown = TutorPrompt::displaySources([
+            ['id' => 'a', 'label' => 'A', 'score' => 0.40],
+            ['id' => 'b', 'label' => 'B', 'score' => 0.61],
+        ]);
+
+        $this->assertSame([['id' => 'b', 'label' => 'B']], $shown);
+    }
+
+    public function test_display_sources_of_nothing_is_empty(): void
+    {
+        // empty is meaningful: the salient arm then shows its "no matching
+        // course material" note
+        $this->assertSame([], TutorPrompt::displaySources([]));
     }
 
     public function test_citations_are_impossible_when_nothing_was_retrieved(): void

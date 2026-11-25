@@ -73,6 +73,23 @@ $PY tools/kb/eval.py --gold resources/kb/gold-questions.json \
     --index-dir storage/app/kb --k 3
 ```
 
+## Citation labels (contract with the backend)
+
+In the salient study arm, every answer shows chips naming the course material it drew
+on, e.g. **`Vorlesung 14: t-Test I, Folie 12`**. The backend does not construct that
+string: only the pipeline knows whether a page is a slide, a handout page or an exam
+question. So each chunk in the index JSON should carry it:
+
+```json
+{ "id": "stat1-v14-012", "citation": "Vorlesung 14: t-Test I, Folie 12", ... }
+```
+
+- One label per *source a student would recognise*. The backend dedupes chips by label,
+  so two chunks of the same slide should get the same `citation`.
+- German, as the materials are; students see it verbatim.
+- Optional for backwards compatibility: without it, `KbRetriever` falls back to
+  `"<heading chain>, p. <page_start>"`, which is what the hyptest pilot index shows.
+
 ## Things that are non-obvious and were learned the hard way
 
 **Default docling is worse than `pdftotext` for maths.** It detects formula regions

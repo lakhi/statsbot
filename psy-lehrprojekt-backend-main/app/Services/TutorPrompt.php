@@ -32,6 +32,11 @@ use Illuminate\Support\Facades\Log;
  *
  * The answer is ONE coherent explanation; citations remain a separate field so
  * grounding stays measurable. See config/tutor.php for what that trade costs.
+ *
+ * CITATIONS NEVER ENTER THE ANSWER TEXT. The salient and non-salient arms differ
+ * only in whether displaySources() runs, so the text of an answer must not
+ * carry its sources - if it did, the non-salient arm would show them in the
+ * prose. (Until the three-arm study this class appended a "_Source: ..._" line.)
  */
 class TutorPrompt
 {
@@ -65,7 +70,7 @@ class TutorPrompt
     }
 
     /**
-     * The no-rag arm gets the base prompt alone; the rag arm gets the base plus
+     * The no-rag arm gets the base prompt alone; both RAG arms get the base plus
      * the materials block. Everything else is identical between the arms, which
      * is what makes the contrast auditable.
      */
@@ -138,8 +143,12 @@ class TutorPrompt
     /**
      * Pull the answer and its citations out of the model's reply.
      *
+     * `sources` is every valid citation, in the model's order and uncapped - what
+     * the answer drew on, whatever the arm displays. displaySources() decides
+     * what a salient-arm student sees.
+     *
      * @param  array<int,array<string,mixed>>  $hits
-     * @return array{answer:string,sources:array<int,array<string,mixed>>,content:string}
+     * @return array{answer:string,sources:array<int,array{id:string,label:string,score:float}>}
      */
     public static function parse(?string $raw, array $hits): array
     {
@@ -175,10 +184,7 @@ class TutorPrompt
             if (isset($byId[$id])) {
                 $sources[] = [
                     'id' => $id,
-                    'heading' => $byId[$id]['heading'],
-                    'doc_title' => $byId[$id]['doc_title'],
-                    'page_start' => $byId[$id]['page_start'],
-                    'page_end' => $byId[$id]['page_end'],
+                    'label' => $byId[$id]['label'],
                     'score' => $byId[$id]['score'],
                 ];
             } else {
@@ -189,30 +195,38 @@ class TutorPrompt
         return [
             'answer' => $answer,
             'sources' => $sources,
-            'content' => self::render($answer, $sources),
         ];
     }
 
     /**
-     * What gets persisted to history.received and shown to the student.
+     * The citation chips a salient-arm student sees: one per distinct label,
+     * highest retrieval score first, at most config('tutor.max_citations').
      *
-     * The answer is already one coherent piece of prose, so this appends only a
-     * source line - the corpus keeps a readable record of which passages the
-     * turn drew on without the chips the UI renders separately.
+     * Deduplicating by label rather than id matters once the corpus is slides:
+     * two chunks of "Vorlesung 14, Folie 12" are one source to a student, and
+     * showing it twice would only look like padding.
      *
-     * @param  array<int,array<string,mixed>>  $sources
+     * An empty result is meaningful - the salient arm then shows its "no
+     * matching course material" note.
+     *
+     * @param  array<int,array{id:string,label:string,score:float}>  $sources
+     * @return array<int,array{id:string,label:string}>
      */
-    public static function render(string $answer, array $sources): string
+    public static function displaySources(array $sources): array
     {
-        if ($sources === []) {
-            return $answer;
+        $max = max(1, (int) config('tutor.max_citations'));
+
+        //usort is stable, so equal scores keep the model's citation order
+        usort($sources, static fn ($a, $b) => $b['score'] <=> $a['score']);
+
+        $shown = [];
+        foreach ($sources as $s) {
+            if (count($shown) >= $max) {
+                break;
+            }
+            $shown[$s['label']] ??= ['id' => $s['id'], 'label' => $s['label']];
         }
 
-        $refs = implode(', ', array_map(
-            static fn ($s) => $s['heading'].' (p. '.$s['page_start'].')',
-            $sources
-        ));
-
-        return trim($answer)."\n\n_Source: {$refs}_";
+        return array_values($shown);
     }
 }

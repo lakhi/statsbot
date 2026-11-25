@@ -54,14 +54,25 @@ class AllocationTest extends TestCase
         return $this->postJson('/api/register', []);
     }
 
+    /**
+     * The arm /register allocated. Read from the database, because no response
+     * carries it - a student who could see their arm would be unblinded.
+     */
+    private function armAfterRegistering(string $uid): ?string
+    {
+        $this->register($uid)->assertSuccessful()->assertJsonMissingPath('arm');
+
+        return DB::table('students')->where('uid', $uid)->value('arm');
+    }
+
     public function test_slots_are_claimed_in_sequence_order_within_a_stratum(): void
     {
         $this->seedSequence('bachelor', ['rag', 'no_rag', 'no_rag', 'rag']);
         $this->roster('u:one', 'bachelor');
         $this->roster('u:two', 'bachelor');
 
-        $this->register('u:one')->assertSuccessful()->assertJsonPath('arm', 'rag');
-        $this->register('u:two')->assertSuccessful()->assertJsonPath('arm', 'no_rag');
+        $this->assertSame('rag', $this->armAfterRegistering('u:one'));
+        $this->assertSame('no_rag', $this->armAfterRegistering('u:two'));
     }
 
     public function test_each_stratum_has_its_own_independent_sequence(): void
@@ -73,8 +84,8 @@ class AllocationTest extends TestCase
         $this->roster('u:ba', 'bachelor');
         $this->roster('u:ma', 'master');
 
-        $this->register('u:ba')->assertJsonPath('arm', 'rag');
-        $this->register('u:ma')->assertJsonPath('arm', 'no_rag');
+        $this->assertSame('rag', $this->armAfterRegistering('u:ba'));
+        $this->assertSame('no_rag', $this->armAfterRegistering('u:ma'));
     }
 
     public function test_re_registering_does_not_consume_a_second_slot(): void
@@ -82,8 +93,8 @@ class AllocationTest extends TestCase
         $this->seedSequence('bachelor', ['rag', 'no_rag']);
         $this->roster('u:one', 'bachelor');
 
-        $this->register('u:one')->assertJsonPath('arm', 'rag');
-        $this->register('u:one')->assertJsonPath('arm', 'rag');
+        $this->assertSame('rag', $this->armAfterRegistering('u:one'));
+        $this->assertSame('rag', $this->armAfterRegistering('u:one'));
 
         $this->assertSame(1, DB::table('allocation_slot')->whereNotNull('claimed_uid')->count(),
             'a re-submitted disclaimer must never re-randomise a participant');
@@ -93,7 +104,7 @@ class AllocationTest extends TestCase
     {
         $this->seedSequence('unknown', ['no_rag']);
 
-        $this->register('u:walkin')->assertSuccessful()->assertJsonPath('arm', 'no_rag');
+        $this->assertSame('no_rag', $this->armAfterRegistering('u:walkin'));
 
         $this->assertSame('unknown',
             DB::table('allocation_slot')->where('claimed_uid', 'u:walkin')->value('stratum'));
@@ -115,7 +126,7 @@ class AllocationTest extends TestCase
         $this->seedSequence('bachelor', ['no_rag', 'rag'], 'study');
         $this->roster('u:one', 'bachelor');
 
-        $this->register('u:one')->assertJsonPath('arm', 'rag');
+        $this->assertSame('rag', $this->armAfterRegistering('u:one'));
 
         $this->assertSame(0,
             DB::table('allocation_slot')->where('phase', 'study')->whereNotNull('claimed_uid')->count(),
@@ -128,7 +139,7 @@ class AllocationTest extends TestCase
         $this->seedSequence('bachelor', ['rag']);
         $this->roster('u:one', 'bachelor');
 
-        $this->register('u:one')->assertSuccessful()->assertJsonPath('arm', null);
+        $this->assertNull($this->armAfterRegistering('u:one'));
 
         $this->assertSame(0, DB::table('allocation_slot')->whereNotNull('claimed_uid')->count());
     }
@@ -156,16 +167,18 @@ class AllocationTest extends TestCase
 
     public function test_the_monitor_reports_buckets_and_the_ledger(): void
     {
-        $this->seedSequence('bachelor', ['rag', 'no_rag']);
+        $this->seedSequence('bachelor', ['rag_salient', 'no_rag', 'rag_nonsalient']);
         $this->roster('u:one', 'bachelor');
         $this->register('u:one');
 
         $_SERVER['uid'] = 'u:admin';
         $this->getJson('/api/study/monitor')
             ->assertOk()
-            ->assertJsonPath('buckets.bachelor.rag', 1)
+            //every configured arm is a column, even at zero
+            ->assertJsonPath('buckets.bachelor.rag_salient', 1)
+            ->assertJsonPath('buckets.bachelor.rag_nonsalient', 0)
             ->assertJsonPath('buckets.bachelor.no_rag', 0)
-            ->assertJsonPath('slots_remaining.bachelor', 1)
+            ->assertJsonPath('slots_remaining.bachelor', 2)
             ->assertJsonPath('ledger.0.uid', 'u:one')
             ->assertJsonPath('ledger.0.consistent', true);
     }
@@ -187,6 +200,37 @@ class AllocationTest extends TestCase
         $this->assertNull($student->arm);
         $this->assertSame(0, (int) $student->registered);
         $this->assertSame((int) $student->token_limit, (int) $student->token_left);
+    }
+
+    public function test_the_test_seed_is_three_armed_and_balanced_in_every_stratum(): void
+    {
+        $this->artisan('study:seed-test', ['--with-unknown' => true])->assertSuccessful();
+
+        foreach (['bachelor', 'master', 'unknown'] as $stratum) {
+            $perArm = DB::table('allocation_slot')
+                ->where('phase', 'test')->where('stratum', $stratum)
+                ->selectRaw('arm, COUNT(*) AS n')->groupBy('arm')
+                ->pluck('n', 'arm')->map(fn ($n) => (int) $n)->sort()->all();
+
+            $this->assertSame(['no_rag', 'rag_nonsalient', 'rag_salient'], collect($perArm)->keys()->sort()->values()->all());
+            $this->assertCount(1, array_unique($perArm), "$stratum is not balanced across arms");
+        }
+
+        // different openings, so a shared counter would be visibly wrong
+        $openings = DB::table('allocation_slot')->where('seq', 1)->pluck('arm', 'stratum');
+        $this->assertNotSame($openings['bachelor'], $openings['master']);
+    }
+
+    public function test_reseeding_is_refused_while_students_still_hold_an_arm(): void
+    {
+        // reseeding under them would leave allocated students in no slot at all
+        $this->seedSequence('bachelor', ['rag_salient']);
+        $this->roster('u:one', 'bachelor');
+        $this->register('u:one');
+
+        $this->artisan('study:seed-test', ['--force' => true])->assertFailed();
+
+        $this->assertSame('u:one', DB::table('allocation_slot')->value('claimed_uid'));
     }
 
     public function test_reset_is_refused_outside_the_test_phase(): void

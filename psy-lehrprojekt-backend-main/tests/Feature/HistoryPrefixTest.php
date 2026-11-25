@@ -49,6 +49,7 @@ class HistoryPrefixTest extends TestCase
             '2026_09_02_120000_add_retrieval_provenance_to_history_table.php',
             '2026_09_11_100200_add_arm_to_students_table.php',
             '2026_09_11_100300_add_arm_to_history_table.php',
+            '2026_11_25_100000_add_citations_to_history_table.php',
         ] as $migration) {
             (require database_path('migrations/'.$migration))->up();
         }

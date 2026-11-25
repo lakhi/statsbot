@@ -5,10 +5,12 @@ use App\Models\Student;
 use App\Services\Allocator;
 use App\Services\KbRetriever;
 use App\Services\TutorPrompt;
+use App\Support\StudyArm;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Validation\Rule;
 
 Route::get('/student', function (Request $request) {
 
@@ -83,11 +85,35 @@ Route::get('/history', function (Request $request) {
 
 Route::get('/history/{started}', function (Request $request, $started) {
 
+    //Only what the chat view renders. This used to return every column, which
+    //put the student's own arm, the retrieved chunk ids and the token counts in
+    //the browser's network tab - enough to unblind the trial.
+    //
+    //`sources` is replayed from what was stamped at the time (sources_shown),
+    //never recomputed, and only for rows that showed sources: a reloaded
+    //salient thread looks as it did live, and every other row has no key at all
+    //- exactly like a live no-RAG or non-salient answer.
     return DB::table('history')
+        ->select('id', 'sent', 'received', 'started', 'created_at', 'sources_shown')
         ->where('student_id', $request->student->id)
         ->where('started', $started)
         ->orderBy('id')
-        ->get();
+        ->get()
+        ->map(function ($row) {
+            $out = [
+                'id' => $row->id,
+                'sent' => $row->sent,
+                'received' => $row->received,
+                'started' => $row->started,
+                'created_at' => $row->created_at,
+            ];
+
+            if ($row->sources_shown !== null) {
+                $out['sources'] = json_decode($row->sources_shown, true) ?? [];
+            }
+
+            return $out;
+        });
 
 });
 
@@ -97,6 +123,8 @@ Route::post('/messages', function (Request $request) {
         'messages.*.content' => 'required|string',
         'messages.*.role' => 'required|in:assistant,user',
         'started' => 'required|numeric',
+        //test stack only - see StudyArm::effective() and config/study.php
+        'test_arm' => ['nullable', 'string', Rule::in(array_keys(config('study.arms')))],
     ]);
 
     $messages = $request->messages;
@@ -121,9 +149,14 @@ Route::post('/messages', function (Request $request) {
     //replaced, so it still works as the study-wide kill switch - set it false
     //and every arm falls back to ungrounded without moving a file.
     //
+    //Both RAG arms retrieve and are prompted identically; everything from here
+    //to the Azure call cannot tell salient from non-salient. They part only at
+    //$shown below, after the model has answered.
+    //
     //search() returns [] on any failure, so a broken index degrades the tutor
     //rather than taking it offline.
-    $grounded = config('tutor.rag_enabled') && $student->arm === 'rag';
+    $arm = StudyArm::effective($request, $student);
+    $grounded = config('tutor.rag_enabled') && StudyArm::retrieves($arm);
 
     $retriever = app(KbRetriever::class);
     $hits = $grounded
@@ -161,7 +194,11 @@ Route::post('/messages', function (Request $request) {
     ])->post(env('AZURE_ENDPOINT', 'no_endpoint_available').'/openai/deployments/'.env('AZURE_DEPLOYMENT', 'no_deployment_available').'/chat/completions?api-version='.env('AZURE_API_VERSION', 'no_api_version_available'), $payload);
 
     $answer = TutorPrompt::parse($gptResponse['choices'][0]['message']['content'] ?? null, $hits);
-    $responseMessage = $answer['content'];
+
+    //THE point where the RAG arms differ. null = this arm displays no sources;
+    //[] = salient, nothing to cite (the UI shows its "no matching course
+    //material" note); otherwise the chips. The answer text is the same either way.
+    $shown = StudyArm::showsSources($arm) ? TutorPrompt::displaySources($answer['sources']) : null;
 
     //NOTE: $messages here is still the student's own conversation - assemble()
     //worked on a copy - so history.sent stays exactly what the student typed.
@@ -171,7 +208,7 @@ Route::post('/messages', function (Request $request) {
     $history->student_id = $request->student->id;
     $history->sent = $lastSentMessage['content'];
     $history->started = $started;
-    $history->received = $responseMessage;
+    $history->received = $answer['answer'];
     $history->prompt_tokens = $gptResponse['usage']['prompt_tokens'];
     $history->completion_tokens = $gptResponse['usage']['completion_tokens'];
     $history->total_tokens = $gptResponse['usage']['total_tokens'];
@@ -185,10 +222,20 @@ Route::post('/messages', function (Request $request) {
     )) : null;
     $history->grounded = $answer['sources'] !== [];
 
+    //what the answer drew on (both RAG arms) vs what the student saw (salient
+    //only) - see the add_citations_to_history migration
+    $history->cited = $grounded
+        ? json_encode($answer['sources'], JSON_UNESCAPED_UNICODE)
+        : null;
+    $history->sources_shown = $shown === null
+        ? null
+        : json_encode($shown, JSON_UNESCAPED_UNICODE);
+
     //Stamped, never joined from students.arm - see the add_arm_to_history
     //migration. A join would label this student's PRE-study messages with the
-    //arm they were later allocated to.
-    $history->arm = $student->arm;
+    //arm they were later allocated to. The EFFECTIVE arm, so a test-URL turn is
+    //filed under the arm it was actually answered by.
+    $history->arm = $arm;
 
     $history->save();
 
@@ -196,13 +243,19 @@ Route::post('/messages', function (Request $request) {
 
     $student->save();
 
-    return response()->json([
+    //No-RAG and non-salient responses have identical keys. `grounded` and the
+    //per-turn `costs` used to be here: the frontend reads neither, and both
+    //told a non-salient student in the network tab that retrieval was running.
+    $body = [
         'content' => $history->received,
-        'sources' => $answer['sources'],
-        'grounded' => $history->grounded,
         'token_left' => $student->token_left,
-        'costs' => $history->total_tokens,
-    ]);
+    ];
+
+    if ($shown !== null) {
+        $body['sources'] = $shown;
+    }
+
+    return response()->json($body);
 
 });
 
@@ -251,13 +304,16 @@ Route::get('/study/monitor', function (Request $request) {
         ->whereNotNull('arm')
         ->pluck('arm', 'uid');
 
+    //columns come from the configured arms, so every arm shows even at 0; an
+    //arm in the slots but not in config (a stale seed) still gets counted
+    $arms = array_keys(config('study.arms'));
+
     $buckets = [];
     $ledger = [];
     $remaining = [];
 
     foreach ($slots as $slot) {
-        $buckets[$slot->stratum]['rag'] ??= 0;
-        $buckets[$slot->stratum]['no_rag'] ??= 0;
+        $buckets[$slot->stratum] ??= array_fill_keys($arms, 0);
         $remaining[$slot->stratum] ??= 0;
 
         if ($slot->claimed_uid === null) {
@@ -285,6 +341,7 @@ Route::get('/study/monitor', function (Request $request) {
     $payload = [
         'phase' => $phase,
         'rag_enabled' => (bool) config('tutor.rag_enabled'),
+        'arm_override' => (bool) config('study.arm_override'),
         'buckets' => $buckets,
         'slots_remaining' => $remaining,
         'ledger' => $ledger,
@@ -310,15 +367,19 @@ Route::get('/study/monitor', function (Request $request) {
     }
 
     $counts = '';
-    foreach ($buckets as $stratum => $arms) {
+    foreach ($buckets as $stratum => $byArm) {
+        $cells = '';
+        foreach ($arms as $arm) {
+            $cells .= '<td>'.(int) ($byArm[$arm] ?? 0).'</td>';
+        }
         $counts .= sprintf(
-            '<tr><td>%s</td><td>%d</td><td>%d</td><td>%d</td></tr>',
+            '<tr><td>%s</td>%s<td>%d</td></tr>',
             e($stratum),
-            $arms['rag'] ?? 0,
-            $arms['no_rag'] ?? 0,
+            $cells,
             $remaining[$stratum] ?? 0
         );
     }
+    $armHeaders = implode('', array_map(fn ($a) => '<th>'.e($a).'</th>', $arms));
 
     return response(
         '<!doctype html><meta charset="utf-8"><title>StatsBot allocation</title>'
@@ -326,8 +387,9 @@ Route::get('/study/monitor', function (Request $request) {
         .'td,th{border:1px solid #ccc;padding:.35rem .7rem;text-align:left}</style>'
         .'<h1>Allocation monitor</h1>'
         .'<p>phase: <b>'.e($phase).'</b> &middot; RAG_ENABLED: <b>'
-        .(config('tutor.rag_enabled') ? 'true' : 'false').'</b></p>'
-        .'<h2>Buckets</h2><table><tr><th>stratum</th><th>rag</th><th>no_rag</th><th>slots left</th></tr>'
+        .(config('tutor.rag_enabled') ? 'true' : 'false').'</b> &middot; arm override: <b>'
+        .(config('study.arm_override') ? 'ON' : 'off').'</b></p>'
+        .'<h2>Buckets</h2><table><tr><th>stratum</th>'.$armHeaders.'<th>slots left</th></tr>'
         .$counts.'</table>'
         .'<h2>Claim ledger</h2><table><tr><th>seq</th><th>stratum</th><th>arm</th><th>uid</th>'
         .'<th>claimed at</th><th>students.arm</th></tr>'.$rows.'</table>',

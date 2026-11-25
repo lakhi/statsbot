@@ -20,4 +20,13 @@ class Student extends Model
         'registered' => 'boolean',
         'activated' => 'boolean',
     ];
+
+    //Never serialised to the browser. /student and /register return this model
+    //as JSON, so without this every student could read their own trial arm in
+    //the network tab. The frontend needs no arm: what to render follows from the
+    //shape of each /messages response. Writes are unaffected.
+    protected $hidden = [
+        'arm',
+        'allocated_at',
+    ];
 }

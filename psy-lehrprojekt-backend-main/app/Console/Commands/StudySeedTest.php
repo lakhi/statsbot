@@ -6,27 +6,36 @@ use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 
 /**
- * Seeds the 'test' randomisation sequence used to rehearse all four buckets
- * with two logins.
+ * Seeds the 'test' randomisation sequence used to rehearse allocation.
  *
- * The sequence is chosen so that the most likely implementation bug produces a
- * VISIBLY wrong result rather than a plausible one: bachelor and master start
- * on opposite arms, so a version that kept one global sequence instead of one
- * per stratum would hand the same arm to run 1 and run 3.
+ * Permuted blocks of six - two of each of the three arms - with a different
+ * opening arm per stratum. That keeps the old design goal: the most likely
+ * implementation bug produces a VISIBLY wrong result rather than a plausible
+ * one. A version that kept one global sequence instead of one per stratum would
+ * hand bachelor's second claimant master's opening arm.
  *
- * No 'unknown' slots are seeded, deliberately. A roster lookup that misfires
+ * No 'unknown' slots by default, deliberately: a roster lookup that misfires
  * then aborts with 503 instead of quietly allocating from a fallback sequence.
+ * --with-unknown seeds them anyway, for an internal test round in which
+ * teammates who are not on the roster need to get past the disclaimer.
  */
 class StudySeedTest extends Command
 {
-    protected $signature = 'study:seed-test {--force : reseed even if test slots already exist}';
+    protected $signature = 'study:seed-test
+        {--force : reseed even if test slots already exist}
+        {--with-unknown : also seed the unknown stratum, for testers not on the roster}';
 
     protected $description = 'Seed the test-phase allocation sequence';
 
-    /** Blocks of 4, opposite openings per stratum. */
     private const SEQUENCES = [
-        'bachelor' => ['rag', 'no_rag', 'no_rag', 'rag'],
-        'master' => ['no_rag', 'rag', 'rag', 'no_rag'],
+        'bachelor' => ['rag_salient', 'no_rag', 'rag_nonsalient', 'rag_nonsalient', 'rag_salient', 'no_rag'],
+        'master' => ['no_rag', 'rag_nonsalient', 'rag_salient', 'rag_salient', 'no_rag', 'rag_nonsalient'],
+    ];
+
+    /** Two blocks: enough for a handful of teammates. */
+    private const UNKNOWN = [
+        'rag_nonsalient', 'rag_salient', 'no_rag', 'no_rag', 'rag_nonsalient', 'rag_salient',
+        'rag_salient', 'rag_nonsalient', 'no_rag', 'rag_nonsalient', 'no_rag', 'rag_salient',
     ];
 
     public function handle(): int
@@ -45,10 +54,24 @@ class StudySeedTest extends Command
             return self::FAILURE;
         }
 
-        DB::transaction(function () {
+        //Reseeding under students who still hold an arm would leave them in no
+        //slot at all - POST /study/reset first, which releases slots AND arms.
+        $held = DB::table('students')->whereNotNull('arm')->count();
+        if ($held > 0) {
+            $this->error("$held students still hold an arm - run POST /study/reset first.");
+
+            return self::FAILURE;
+        }
+
+        $sequences = self::SEQUENCES;
+        if ($this->option('with-unknown')) {
+            $sequences[(string) config('study.unknown_stratum')] = self::UNKNOWN;
+        }
+
+        DB::transaction(function () use ($sequences) {
             DB::table('allocation_slot')->where('phase', 'test')->delete();
 
-            foreach (self::SEQUENCES as $stratum => $arms) {
+            foreach ($sequences as $stratum => $arms) {
                 foreach ($arms as $i => $arm) {
                     DB::table('allocation_slot')->insert([
                         'phase' => 'test',
@@ -62,7 +85,7 @@ class StudySeedTest extends Command
             }
         });
 
-        foreach (self::SEQUENCES as $stratum => $arms) {
+        foreach ($sequences as $stratum => $arms) {
             $this->line(sprintf('%-9s %s', $stratum, implode(', ', $arms)));
         }
 

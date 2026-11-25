@@ -126,9 +126,11 @@ class RegistrationStateTest extends TestCase
 
         $this->postJson('/api/register', [])
             ->assertSuccessful()
-            ->assertJsonPath('arm', 'rag')
-            ->assertJsonPath('registered', true);
+            ->assertJsonPath('registered', true)
+            //allocated, but never told: the arm is hidden from every response
+            ->assertJsonMissingPath('arm');
 
+        $this->assertSame('rag', DB::table('students')->where('uid', 'u:test01')->value('arm'));
         $this->assertSame('u:test01', DB::table('allocation_slot')->where('seq', 1)->value('claimed_uid'));
         $this->assertSame(1, (int) DB::table('students')->where('uid', 'u:test01')->value('registered'));
     }

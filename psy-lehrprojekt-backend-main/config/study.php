@@ -41,4 +41,45 @@ return [
 
     'unknown_stratum' => 'unknown',
 
+    /*
+    |--------------------------------------------------------------------------
+    | Arms
+    |--------------------------------------------------------------------------
+    |
+    | Three arms, but two factors - there is no "citations without retrieval"
+    | cell:
+    |
+    |                     retrieves   shows sources
+    |   no_rag            no          no
+    |   rag_nonsalient    yes         no
+    |   rag_salient       yes         yes
+    |
+    | Code asks the factor question (App\Support\StudyArm::retrieves() /
+    | showsSources()), never "which arm is this". That is what keeps the two RAG
+    | arms the same tutor: up to the moment the answer is displayed, nothing can
+    | tell them apart - same retrieval, same prompt, byte-identical Azure call.
+    |
+    | Keys are the values stored in allocation_slot.arm, students.arm and
+    | history.arm. A NULL or unlisted arm (every pre-trial student, or the
+    | two-arm pilot's old 'rag') gets control behaviour.
+    |
+    */
+
+    'arms' => [
+        'no_rag' => ['retrieves' => false, 'shows_sources' => false],
+        'rag_nonsalient' => ['retrieves' => true, 'shows_sources' => false],
+        'rag_salient' => ['retrieves' => true, 'shows_sources' => true],
+    ],
+
+    /*
+    | Internal testing only. Lets the per-arm test URLs (/rag-pilot-test/salient/
+    | etc.) pin the arm for a request, so one tester can try all three.
+    |
+    | A pinned arm is REFUSED (403), not ignored, whenever this is false or the
+    | phase is 'study'. Ignoring it would quietly answer a tester under the wrong
+    | arm; honouring it in the study would let a student switch arms.
+    */
+
+    'arm_override' => (bool) env('STUDY_ARM_OVERRIDE', false),
+
 ];

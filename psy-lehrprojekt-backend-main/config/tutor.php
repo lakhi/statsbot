@@ -87,15 +87,28 @@ return [
     'structured_output' => (bool) env('TUTOR_STRUCTURED_OUTPUT', true),
 
     /*
+    | Salient arm only: the most citation chips one answer shows. One chip per
+    | distinct label (two chunks of the same slide are one chip), highest
+    | retrieval score first. Every valid citation is still stored, uncapped, in
+    | history.cited; history.sources_shown records exactly what was displayed.
+    |
+    | Fixed for the study (preregistered as 3), so change it only between
+    | cohorts. Values below 1 are treated as 1.
+    */
+    'max_citations' => (int) env('TUTOR_MAX_CITATIONS', 3),
+
+    /*
     |--------------------------------------------------------------------------
     | System prompt
     |--------------------------------------------------------------------------
     |
-    | Split in two so the experimental contrast is auditable. Both arms get
-    | `base`, byte-identical. The rag arm gets `base` + "\n\n" + `materials`.
-    | Diff the two assembled prompts and the diff IS the treatment: one
-    | contiguous appended block, with every pedagogical, tone, language and
-    | notation instruction shared.
+    | Split in two so the experimental contrast is auditable. Every arm gets
+    | `base`, byte-identical. Both RAG arms get `base` + "\n\n" + `materials` -
+    | the SAME prompt for salient and non-salient, because whether citations are
+    | shown is decided only after the model has answered. Diff the no-RAG and RAG
+    | prompts and the diff IS the retrieval treatment: one contiguous appended
+    | block, with every pedagogical, tone, language and notation instruction
+    | shared.
     |
     | The materials block is attached by ARM, not by whether this particular
     | turn retrieved anything. Two reasons: the system prompt has to be a stable
@@ -133,6 +146,10 @@ return [
           has already read.
         - Put the id of every excerpt you actually drew on in citations. Never cite one you did
           not use, and never cite one to support a claim it does not make.
+        - Refer to the course materials only through citations. In the answer itself, never
+          mention the materials, the excerpts, or the lectures, slides, exercises or exams they
+          come from - no "as covered in your lecture", no "siehe Folie 12". The answer has to
+          read the same whether or not its citations are ever shown.
         - The materials are not comprehensive. Where they do not cover the question, answer from
           your own knowledge as usual - do not say the materials are missing, do not apologise
           for them, and do not describe what they do or do not contain.
