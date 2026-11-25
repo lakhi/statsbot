@@ -42,6 +42,20 @@ if [ ! -f "$idx.f32" ] || [ ! -f "$idx.json" ]; then
 fi
 echo "==> index present: $(basename "$idx").f32 ($(wc -c < "$idx.f32") bytes)"
 
+# --- 0b. the pod re-fetches the deploy script BY COMMIT, so that commit must be on GitHub ---
+# The pod keeps its own copy of rag-pilot-deploy.sh from whenever it was installed.
+# A release that relies on a newer deploy script is only safe if the paste line
+# below replaces that copy first - and it can only fetch what has been pushed.
+DEPLOY_SCRIPT="scripts/rag-pilot-deploy.sh"
+git diff --quiet HEAD -- "$DEPLOY_SCRIPT" \
+  || { echo "ERROR: $DEPLOY_SCRIPT has uncommitted changes — commit and push first" >&2; exit 1; }
+DEPLOY_REV="$(git rev-parse HEAD)"
+git fetch -q origin
+git branch -r --contains "$DEPLOY_REV" | grep -q . \
+  || { echo "ERROR: HEAD ${DEPLOY_REV:0:7} is not on GitHub — push first (the pod fetches the deploy script by commit)" >&2; exit 1; }
+DEPLOY_SHA256="$(shasum -a 256 "$DEPLOY_SCRIPT" | awk '{print $1}')"
+echo "==> deploy script pinned to ${DEPLOY_REV:0:7} (sha256 ${DEPLOY_SHA256:0:12}…)"
+
 # --- 1. build the pilot frontend (base-href + test API URL) ---
 echo "==> Building pilot frontend…"
 (
@@ -178,14 +192,22 @@ Next: apply it on the pod.
  1. Connect to the U:Wien VPN.
  2. Open $PODS_LIST
     and click the running zid-webproject-… pod → Terminal.
- 3. Paste ONE line:
+ 3. Paste ONE line. It replaces the pod's copy of the deploy script with the
+    one this release needs (pinned to ${DEPLOY_REV:0:7}, hash-checked), then deploys:
 
-    EXPECT=$sha bash /var/www/rag-pilot-deploy.sh
+    curl -fsSL https://raw.githubusercontent.com/$REPO/$DEPLOY_REV/$DEPLOY_SCRIPT -o /tmp/rag-pilot-deploy.sh && echo "$DEPLOY_SHA256  /tmp/rag-pilot-deploy.sh" | sha256sum -c - && cp /tmp/rag-pilot-deploy.sh /var/www/rag-pilot-deploy.sh && chmod +x /var/www/rag-pilot-deploy.sh && EXPECT=$sha bash /var/www/rag-pilot-deploy.sh
 
- (First time only, install the deploy script first — see
-  scripts/rag-pilot-deploy.sh header.)
+ 4. Only if the deploy log printed "WARNING: RAG_ENABLED" — turn retrieval on:
 
-Per-arm test URLs (need STUDY_ARM_OVERRIDE=true in the pilot .env):
+    sed -i 's/^RAG_ENABLED=.*/RAG_ENABLED=true/' /var/www/lehrprojekt-backend-rag/.env
+
+ 5. Re-seed the three-arm test sequence. This also releases every old
+    allocation, and --with-unknown lets teammates who are not on the roster
+    past the disclaimer:
+
+    cd /var/www/lehrprojekt-backend-rag && php artisan study:seed-test --force --with-unknown
+
+ 6. Share the per-arm test URLs with the team:
     https://statsbot.univie.ac.at/rag-pilot-test/no-rag/
     https://statsbot.univie.ac.at/rag-pilot-test/non-salient/
     https://statsbot.univie.ac.at/rag-pilot-test/salient/

@@ -183,19 +183,31 @@ TOKEN_LIMIT=200000
 STUDY_PHASE=test
 STUDY_ADMIN_UIDS=lakhia92,abhag93
 # Lets /rag-pilot-test/<no-rag|non-salient|salient>/ pin the arm per message.
-# Test stack only: the backend refuses it whenever STUDY_PHASE=study.
+# Test stack only: the backend refuses it unless STUDY_PHASE is exactly 'test'.
 STUDY_ARM_OVERRIDE=true
 ENV
   chmod 600 "$APP/.env"
 fi
 
 # The template above is only written on a FIRST install; a redeploy keeps the old
-# .env. Say so when it predates a key this release relies on, instead of letting
-# the per-arm test URLs fail later as an unexplained 403.
-for key in STUDY_ARM_OVERRIDE TUTOR_MAX_CITATIONS; do
-  grep -q "^${key}=" "$APP/.env" \
-    || log "NOTE: pilot .env has no ${key} — add it by hand (see .env.example)"
-done
+# .env. Add the keys this release relies on when they are missing, so the per-arm
+# test URLs do not fail as an unexplained 403. Never overwrite a value someone set
+# on purpose: a deliberate RAG_ENABLED=false is reported below, not flipped.
+ensure_env() {
+  grep -q "^$1=" "$APP/.env" && return 0
+  [ -z "$(tail -c1 "$APP/.env")" ] || echo >> "$APP/.env"
+  echo "$1=$2" >> "$APP/.env"
+  log ".env: added $1=$2"
+}
+ensure_env STUDY_ARM_OVERRIDE true
+ensure_env TUTOR_MAX_CITATIONS 3
+
+rag_enabled="$(sed -n 's/^RAG_ENABLED=//p' "$APP/.env" | tail -n1)"
+[ "$rag_enabled" = "true" ] \
+  || log "WARNING: RAG_ENABLED=${rag_enabled:-<unset>} — both RAG arms answer UNGROUNDED until it is true"
+study_phase="$(sed -n 's/^STUDY_PHASE=//p' "$APP/.env" | tail -n1)"
+[ "$study_phase" = "test" ] \
+  || log "WARNING: STUDY_PHASE=${study_phase:-<unset>} — the per-arm test URLs need exactly 'test' (else 403)"
 
 chmod -R ug+rwX "$APP" "$API_PUB" "$WEB"
 chmod -R ug+rwX "$APP/storage" "$APP/bootstrap/cache"
@@ -253,6 +265,10 @@ cat <<EOF
 
 Open:  https://statsbot.univie.ac.at/rag-pilot-test/
 Live:  https://statsbot.univie.ac.at/            (unchanged)
+
+Re-seed the three-arm test sequence (releases every old allocation; --with-unknown
+lets teammates who are not on the roster past the disclaimer):
+  cd $APP && php artisan study:seed-test --force --with-unknown
 
 Per-arm test URLs:
   https://statsbot.univie.ac.at/rag-pilot-test/no-rag/
