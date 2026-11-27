@@ -114,10 +114,7 @@ class TutorPromptTest extends TestCase
 
     public function test_parses_one_answer_and_resolves_citations(): void
     {
-        $raw = json_encode([
-            'answer' => 'A p-value is P(T >= c | H0).',
-            'citations' => ['hyptest-003'],
-        ]);
+        $raw = "A p-value is P(T >= c | H0).\n\nCITATIONS: hyptest-003";
 
         $parsed = TutorPrompt::parse($raw, $this->hits());
 
@@ -131,10 +128,10 @@ class TutorPromptTest extends TestCase
     {
         // the salient and non-salient arms differ ONLY in whether sources are
         // displayed; a source line in the prose would show them in both
-        $parsed = TutorPrompt::parse(json_encode([
-            'answer' => 'A p-value is P(T >= c | H0).',
-            'citations' => ['hyptest-003'],
-        ]), $this->hits());
+        $parsed = TutorPrompt::parse(
+            "A p-value [hyptest-003] is P(T >= c | H0) (hyptest-003).\nCITATIONS: hyptest-003",
+            $this->hits()
+        );
 
         $this->assertSame('A p-value is P(T >= c | H0).', $parsed['answer']);
         $this->assertArrayNotHasKey('content', $parsed);
@@ -181,10 +178,7 @@ class TutorPromptTest extends TestCase
 
     public function test_citations_are_impossible_when_nothing_was_retrieved(): void
     {
-        $raw = json_encode([
-            'answer' => 'your notes say ...',
-            'citations' => ['hyptest-003'],
-        ]);
+        $raw = "your notes say ...\n\nCITATIONS: hyptest-003";
 
         $parsed = TutorPrompt::parse($raw, []);
 
@@ -195,10 +189,7 @@ class TutorPromptTest extends TestCase
 
     public function test_a_citation_to_an_unretrieved_id_is_dropped(): void
     {
-        $raw = json_encode([
-            'answer' => 'an answer',
-            'citations' => ['hyptest-003', 'hyptest-999'],
-        ]);
+        $raw = "an answer\n\nCITATIONS: hyptest-003, hyptest-999";
 
         $parsed = TutorPrompt::parse($raw, $this->hits());
 
@@ -206,24 +197,119 @@ class TutorPromptTest extends TestCase
         $this->assertSame('hyptest-003', $parsed['sources'][0]['id']);
     }
 
-    public function test_non_json_reply_is_still_a_usable_answer(): void
+    public function test_a_reply_without_a_citation_line_is_still_a_usable_answer(): void
     {
-        $parsed = TutorPrompt::parse('just prose, no JSON', $this->hits());
+        $parsed = TutorPrompt::parse('just prose, no citation line', $this->hits());
 
-        $this->assertSame('just prose, no JSON', $parsed['answer']);
-        $this->assertSame([], $parsed['sources'], 'prose carries no citations, so the turn is ungrounded');
+        $this->assertSame('just prose, no citation line', $parsed['answer']);
+        $this->assertSame([], $parsed['sources'], 'nothing cited, so the turn is ungrounded');
     }
 
-    public function test_response_format_can_be_disabled(): void
+    public function test_citations_none_cites_nothing_and_is_removed(): void
     {
-        config(['tutor.structured_output' => false]);
-        $this->assertNull(TutorPrompt::responseFormat());
+        $parsed = TutorPrompt::parse("Kurz gesagt: nein.\n\nCITATIONS: none", $this->hits());
 
-        config(['tutor.structured_output' => true]);
-        $format = TutorPrompt::responseFormat();
+        $this->assertSame('Kurz gesagt: nein.', $parsed['answer']);
+        $this->assertSame([], $parsed['sources']);
+    }
+
+    /** @return array<string,array{0:string}> */
+    public static function citationLineShapes(): array
+    {
+        // all seen from gpt-5.4-mini in the 27 Nov test run, or close to it
+        return [
+            'own line' => ["Die Antwort.\nCITATIONS: c8603143, c76373e1"],
+            'after a blank line' => ["Die Antwort.\n\nCITATIONS: c8603143, c76373e1\n"],
+            'run on after the last sentence' => ['Die Antwort. CITATIONS: c8603143, c76373e1'],
+            'bold' => ["Die Antwort.\n\n**CITATIONS:** c8603143, c76373e1"],
+            'bracketed ids' => ["Die Antwort.\n\nCITATIONS: [c8603143], [c76373e1]."],
+            'lower case' => ["Die Antwort.\n\nCitations: c8603143; c76373e1"],
+        ];
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('citationLineShapes')]
+    public function test_the_citation_line_is_found_in_every_shape_the_model_writes(string $raw): void
+    {
+        $parsed = TutorPrompt::parse($raw, $this->corpusHits());
+
+        $this->assertSame('Die Antwort.', $parsed['answer']);
+        $this->assertSame(['c8603143', 'c76373e1'], array_column($parsed['sources'], 'id'));
+    }
+
+    public function test_only_a_final_citation_line_counts(): void
+    {
+        $raw = "Write CITATIONS: like this in a paper?\nNo, use APA.\n\nCITATIONS: none";
+
+        $parsed = TutorPrompt::parse($raw, $this->corpusHits());
+
+        $this->assertSame("Write CITATIONS: like this in a paper?\nNo, use APA.", $parsed['answer']);
+        $this->assertSame([], $parsed['sources']);
+    }
+
+    public function test_inline_ids_are_removed_from_the_prose_and_count_as_cited(): void
+    {
+        $raw = "Ein t-Test vergleicht zwei Gruppen [c8603143]. Die ANOVA prüft \\(H_0\\) [c76373e1, c c8803f3].\n\n"
+            ."Für zwei Gruppen gilt \\(F=t^2\\) (c8603143).\n\nCITATIONS: c8603143";
+
+        $parsed = TutorPrompt::parse($raw, $this->corpusHits());
+
         $this->assertSame(
-            ['answer', 'citations'],
-            $format['json_schema']['schema']['required']
+            "Ein t-Test vergleicht zwei Gruppen. Die ANOVA prüft \\(H_0\\).\n\nFür zwei Gruppen gilt \\(F=t^2\\).",
+            $parsed['answer']
         );
+        // "c c8803f3" is the retrieved id cc8803f3 with a stray space in it
+        $this->assertSame(['c8603143', 'c76373e1', 'cc8803f3'], array_column($parsed['sources'], 'id'));
+    }
+
+    public function test_a_split_id_on_the_citation_line_is_joined(): void
+    {
+        $parsed = TutorPrompt::parse("Antwort.\n\nCITATIONS: c c8803f3, c8603143", $this->corpusHits());
+
+        $this->assertSame(['cc8803f3', 'c8603143'], array_column($parsed['sources'], 'id'));
+    }
+
+    public function test_brackets_that_are_not_ids_are_left_alone(): void
+    {
+        $raw = "Das 95%-KI ist [0.34, 1.23] und \\[x\\] bleibt (c ist eine Konstante).\nCITATIONS: none";
+
+        $parsed = TutorPrompt::parse($raw, $this->corpusHits());
+
+        $this->assertSame('Das 95%-KI ist [0.34, 1.23] und \\[x\\] bleibt (c ist eine Konstante).', $parsed['answer']);
+    }
+
+    public function test_control_characters_never_reach_the_student(): void
+    {
+        // what corrupted JSON escapes left in the answer before the plain-text format
+        $raw = "H\x00e4ufigkeiten und \x08eta\x1b[0m\ttab stays\r\nline\nCITATIONS: none";
+
+        $parsed = TutorPrompt::parse($raw, $this->corpusHits());
+
+        $this->assertSame("He4ufigkeiten und eta[0m\ttab stays\r\nline", $parsed['answer']);
+    }
+
+    public function test_every_arm_is_asked_for_the_citation_line_and_none_for_json(): void
+    {
+        foreach ([false, true] as $grounded) {
+            $prompt = TutorPrompt::systemPrompt($grounded);
+            $this->assertStringContainsString('CITATIONS: none', $prompt);
+            $this->assertStringNotContainsString('Return JSON', $prompt);
+        }
+        $materials = TutorPrompt::assemble([['role' => 'user', 'content' => 'q']], $this->hits(), true)[1]['content'];
+        $this->assertStringContainsString('CITATIONS line', $materials);
+    }
+
+    /** @return array<int,array<string,mixed>> */
+    private function corpusHits(): array
+    {
+        $hit = fn (string $id, string $label, float $score) => [
+            'id' => $id, 'heading' => '', 'label' => $label, 'doc_title' => '', 'page_start' => 1,
+            'page_end' => 1, 'text' => '...', 'score' => $score,
+        ];
+
+        return [
+            $hit('c8603143', 'Statistik II · Einheit 1: Varianzanalytische Methoden · Folie 24', 0.61),
+            $hit('c76373e1', 'Statistik II · Einheit 1: Varianzanalytische Methoden · Folie 18', 0.58),
+            $hit('cc8803f3', 'Statistik I · Vorlesung 14: t-Test · Folie 2', 0.52),
+        ];
     }
 }

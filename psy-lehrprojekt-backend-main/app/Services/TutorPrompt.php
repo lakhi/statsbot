@@ -37,9 +37,24 @@ use Illuminate\Support\Facades\Log;
  * only in whether displaySources() runs, so the text of an answer must not
  * carry its sources - if it did, the non-salient arm would show them in the
  * prose. (Until the three-arm study this class appended a "_Source: ..._" line.)
+ * parse() therefore strips the citation line and any "[id]" the model wrote
+ * into the prose anyway, and counts those ids as cited.
+ *
+ * PLAIN TEXT, NOT JSON. The reply is the answer followed by one final line,
+ * "CITATIONS: id, id" or "CITATIONS: none". It used to be a strict JSON schema
+ * {answer, citations}, but inside a JSON string every umlaut, Greek letter and
+ * LaTeX backslash must be escaped, and gpt-5.4-mini got those escapes wrong in
+ * a third of its answers ("H\x00e4ufigkeiten", "\x08eta" for \beta). Re-asked as
+ * plain text, the same 44 questions came back with none (bake-off, 27 Nov 2026).
  */
 class TutorPrompt
 {
+    /** Characters no answer may contain: C0 controls except tab, newline, CR; and DEL. */
+    private const CONTROL = '/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u';
+
+    /** Shape of a corpus chunk id ("c" + 7 hex). The model sometimes splits it ("c c8803f3"). */
+    private const CHUNK_ID = 'c\s?[0-9a-f]{7}';
+
     /**
      * @param  array<int,array{role:string,content:string}>  $messages
      * @param  array<int,array<string,mixed>>  $hits
@@ -88,10 +103,14 @@ class TutorPrompt
     /** @param array<int,array<string,mixed>> $hits */
     private static function renderMaterials(array $hits): string
     {
+        //The reminder about the CITATIONS line sits here, right before the
+        //student's turn, because the earlier assistant turns the frontend sends
+        //back have that line stripped and would otherwise teach the model to drop it.
         $lines = [
             'Course materials retrieved for the current question. These are excerpts from',
-            "the student's own course notes. Cite them by the id in brackets. They are",
-            'context, not something the student said.',
+            "the student's own course notes, each headed by its id in brackets. They are",
+            'context, not something the student said. List the ids of the excerpts you',
+            'draw on in your final CITATIONS line, and nowhere else.',
             '',
         ];
 
@@ -109,40 +128,13 @@ class TutorPrompt
         return implode("\n", $lines);
     }
 
-    /** Structured-output schema. Null when disabled, so the caller omits the key. */
-    public static function responseFormat(): ?array
-    {
-        if (! config('tutor.structured_output')) {
-            return null;
-        }
-
-        return [
-            'type' => 'json_schema',
-            'json_schema' => [
-                'name' => 'tutor_answer',
-                'strict' => true,
-                'schema' => [
-                    'type' => 'object',
-                    'properties' => [
-                        'answer' => [
-                            'type' => 'string',
-                            'description' => 'The complete explanation, as one coherent answer.',
-                        ],
-                        'citations' => [
-                            'type' => 'array',
-                            'items' => ['type' => 'string'],
-                            'description' => 'Ids of excerpts actually drawn on. Empty when none were.',
-                        ],
-                    ],
-                    'required' => ['answer', 'citations'],
-                    'additionalProperties' => false,
-                ],
-            ],
-        ];
-    }
-
     /**
      * Pull the answer and its citations out of the model's reply.
+     *
+     * The reply is the answer, then a final "CITATIONS: id, id" (or "none") line.
+     * Cited are the ids on that line plus any "[id]" the model wrote into the
+     * prose, which is removed. A reply without the line is still a usable answer;
+     * it is simply grounded only by whatever ids it carried inline.
      *
      * `sources` is every valid citation, in the model's order and uncapped - what
      * the answer drew on, whatever the arm displays. displaySources() decides
@@ -153,20 +145,20 @@ class TutorPrompt
      */
     public static function parse(?string $raw, array $hits): array
     {
-        $raw = (string) $raw;
-        $answer = $raw;
-        $cited = [];
-
-        $decoded = json_decode($raw, true);
-        if (is_array($decoded) && array_key_exists('answer', $decoded)) {
-            $answer = is_string($decoded['answer']) ? trim($decoded['answer']) : '';
-            $cited = is_array($decoded['citations'] ?? null) ? $decoded['citations'] : [];
-        } else {
-            // Not JSON - the api-version may not support structured output, or the
-            // model ignored it. The prose is still a usable answer; it simply
-            // carries no citations, so the turn records as ungrounded.
-            Log::info('TutorPrompt: reply was not structured JSON, treating as plain answer');
+        $byId = [];
+        foreach ($hits as $h) {
+            $byId[$h['id']] = $h;
         }
+
+        [$answer, $cited] = self::splitCitationLine((string) $raw, array_keys($byId));
+        [$answer, $inline] = self::stripInlineIds($answer, array_keys($byId));
+        $cited = array_merge($cited, $inline);
+
+        $answer = preg_replace(self::CONTROL, '', $answer, -1, $controls) ?? $answer;
+        if ($controls > 0) {
+            Log::warning('TutorPrompt: removed control characters from the answer', ['count' => $controls]);
+        }
+        $answer = trim($answer);
 
         // Nothing retrieved means nothing citable, whatever the model asserts.
         if ($hits === []) {
@@ -176,10 +168,6 @@ class TutorPrompt
         // Drop citations to ids that were never supplied. A cited id that was not
         // retrieved is the model inventing a source, and it must not reach a
         // student as a chip implying the course said so.
-        $byId = [];
-        foreach ($hits as $h) {
-            $byId[$h['id']] = $h;
-        }
         $sources = [];
         foreach (array_unique($cited) as $id) {
             if (isset($byId[$id])) {
@@ -197,6 +185,76 @@ class TutorPrompt
             'answer' => $answer,
             'sources' => $sources,
         ];
+    }
+
+    /**
+     * Split off the final "CITATIONS: ..." line.
+     *
+     * Takes the LAST "CITATIONS:" followed by nothing but the rest of its line.
+     * The model usually writes it on a line of its own, occasionally runs it on
+     * after its final sentence, sometimes in bold or backticks. A mention earlier
+     * in the text is left alone.
+     *
+     * @param  array<int,string>  $hitIds
+     * @return array{0:string,1:array<int,string>} the answer without the line, and the ids on it
+     */
+    private static function splitCitationLine(string $raw, array $hitIds): array
+    {
+        if (! preg_match('/^(.*)(?:^|(?<=\s))[*_`]{0,2}CITATIONS[*_`]{0,2}[ \t]*:([^\n]*)\s*\z/sui', $raw, $m)) {
+            if ($hitIds !== []) {
+                Log::info('TutorPrompt: reply has no CITATIONS line');
+            }
+
+            return [$raw, []];
+        }
+
+        //Ids always contain a digit, which drops "none", "keine" and similar.
+        //Two adjacent tokens that join into a retrieved id are one id the model
+        //split ("c c8803f3").
+        $tokens = preg_split('/[^\w-]+/u', $m[2], -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        $ids = [];
+        for ($i = 0; $i < count($tokens); $i++) {
+            if (isset($tokens[$i + 1]) && in_array($tokens[$i].$tokens[$i + 1], $hitIds, true)) {
+                $ids[] = $tokens[$i].$tokens[++$i];
+            } elseif (preg_match('/\d/', $tokens[$i])) {
+                $ids[] = $tokens[$i];
+            }
+        }
+
+        return [rtrim($m[1]), $ids];
+    }
+
+    /**
+     * Remove "[id]" / "[id, id]" / "(id)" groups from the prose and return their ids.
+     *
+     * The prompt asks for ids on the CITATIONS line only, but the model still
+     * writes them inline in about two answers in five. They mean nothing to a
+     * student, and in the non-salient arm they would look like source markers.
+     * An id written inline is still the model saying it drew on that excerpt, so
+     * it counts as cited.
+     *
+     * @param  array<int,string>  $hitIds
+     * @return array{0:string,1:array<int,string>}
+     */
+    private static function stripInlineIds(string $answer, array $hitIds): array
+    {
+        $one = implode('|', [...array_map(static fn ($id) => preg_quote($id, '/'), $hitIds), self::CHUNK_ID]);
+        $ids = [];
+
+        $stripped = preg_replace_callback(
+            "/[ \\t]*[\\[(]\\s*(?:{$one})(?:\\s*[,;]\\s*(?:{$one}))*\\s*[\\])]/u",
+            static function (array $m) use (&$ids, $one): string {
+                preg_match_all("/{$one}/u", $m[0], $all);
+                foreach ($all[0] as $id) {
+                    $ids[] = (string) preg_replace('/\s+/', '', $id);
+                }
+
+                return '';
+            },
+            $answer
+        );
+
+        return [$stripped ?? $answer, $ids];
     }
 
     /**

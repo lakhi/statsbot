@@ -83,9 +83,12 @@ return [
     | Answer shape
     |--------------------------------------------------------------------------
     |
-    | The tutor writes ONE coherent answer. Citations are still returned as a
-    | separate field, so which excerpts an answer actually drew on stays
-    | measurable even though the prose is unified.
+    | The tutor writes ONE coherent answer. Citations still come back separately
+    | - a final "CITATIONS: id, id" line that TutorPrompt::parse() strips - so
+    | which excerpts an answer actually drew on stays measurable even though the
+    | prose is unified. (Plain text rather than a JSON schema: inside JSON strings
+    | gpt-5.4-mini corrupted umlauts and LaTeX backslashes in a third of its
+    | answers. See TutorPrompt's header.)
     |
     | That is a deliberate trade. The earlier two-layer shape made
     | misattribution structurally impossible: a materials layer could not exist
@@ -96,10 +99,6 @@ return [
     | can no longer be PREVENTED. The system prompt is the only guard left.
     |
     */
-
-    // Azure needs an api-version supporting response_format json_schema.
-    // Set false to fall back to prose parsing (see TutorPrompt::parse).
-    'structured_output' => (bool) env('TUTOR_STRUCTURED_OUTPUT', true),
 
     /*
     | Salient arm only: the most citation chips one answer shows. One chip per
@@ -146,10 +145,11 @@ return [
         - Render mathematics in LaTeX.
         - If you are not confident about something, say so rather than stating it flatly.
 
-        Return JSON with two fields:
-        - answer: your complete explanation.
-        - citations: an array of excerpt ids. Leave it empty unless you have been given
-          excerpts to cite.
+        End your reply with one final line of its own:
+        CITATIONS: <the ids of the excerpts you drew on, separated by commas>
+        or, when you drew on none or were given none:
+        CITATIONS: none
+        That line is removed before the student sees the reply.
         PROMPT,
 
     'system_prompt_materials' => <<<'PROMPT'
@@ -159,12 +159,13 @@ return [
         - Prefer the excerpts over your own knowledge wherever they address the question, and
           use the notation and terminology they use, so your answer matches what the student
           has already read.
-        - Put the id of every excerpt you actually drew on in citations. Never cite one you did
-          not use, and never cite one to support a claim it does not make.
-        - Refer to the course materials only through citations. In the answer itself, never
+        - List the id of every excerpt you actually drew on in the CITATIONS line. Never cite one
+          you did not use, and never cite one to support a claim it does not make.
+        - Refer to the course materials only through that line. In the answer itself, never
           mention the materials, the excerpts, or the lectures, slides, exercises or exams they
-          come from - no "as covered in your lecture", no "siehe Folie 12". The answer has to
-          read the same whether or not its citations are ever shown.
+          come from - no "as covered in your lecture", no "siehe Folie 12", no "in deinen
+          Unterlagen", no "the course materials explain" - and never write an excerpt id. The
+          answer has to read the same whether or not its citations are ever shown.
         - The materials are not comprehensive. Where they do not cover the question, answer from
           your own knowledge as usual - do not say the materials are missing, do not apologise
           for them, and do not describe what they do or do not contain.

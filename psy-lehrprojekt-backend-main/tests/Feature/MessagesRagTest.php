@@ -26,7 +26,6 @@ class MessagesRagTest extends TestCase
             'tutor.index_path' => $this->indexBase,
             'tutor.top_k' => 3,
             'tutor.min_score' => 0.35,
-            'tutor.structured_output' => true,
             'tutor.max_citations' => 3,
             'tutor.embed.endpoint' => 'https://example.invalid',
             'tutor.embed.deployment' => 'test-embed',
@@ -85,12 +84,19 @@ class MessagesRagTest extends TestCase
         return $s;
     }
 
+    /** The model's reply as the prompt asks for it: the answer, then its CITATIONS line. */
+    private static function reply(array $answer): string
+    {
+        return $answer['answer']."\n\nCITATIONS: "
+            .($answer['citations'] === [] ? 'none' : implode(', ', $answer['citations']));
+    }
+
     private function fakeAzure(array $answer, int $promptTokens = 900, int $completionTokens = 300): void
     {
         Http::fake([
             '*/embeddings*' => Http::response(['data' => [['embedding' => [1, 0, 0], 'index' => 0]]]),
             '*/chat/completions*' => Http::response([
-                'choices' => [['message' => ['content' => json_encode($answer)]]],
+                'choices' => [['message' => ['content' => self::reply($answer)]]],
                 'usage' => [
                     'prompt_tokens' => $promptTokens,
                     'completion_tokens' => $completionTokens,
@@ -180,7 +186,8 @@ class MessagesRagTest extends TestCase
             $this->assertSame('user', $messages[count($messages) - 1]['role']);
             $this->assertSame('what is a p-value?', $messages[count($messages) - 1]['content']);
             $this->assertStringContainsString('hyptest-003', $messages[count($messages) - 2]['content']);
-            $this->assertArrayHasKey('response_format', $request->data());
+            $this->assertArrayNotHasKey('response_format', $request->data(),
+                'plain text, not a JSON schema: see TutorPrompt\'s header');
 
             return true;
         });
@@ -208,7 +215,7 @@ class MessagesRagTest extends TestCase
             // orthogonal to every chunk, so nothing clears the floor
             '*/embeddings*' => Http::response(['data' => [['embedding' => [0, 0, 1], 'index' => 0]]]),
             '*/chat/completions*' => Http::response([
-                'choices' => [['message' => ['content' => json_encode([
+                'choices' => [['message' => ['content' => self::reply([
                     'answer' => 'ANOVA partitions variance into between and within components.',
                     'citations' => [],
                 ])]]],
@@ -244,7 +251,7 @@ class MessagesRagTest extends TestCase
         Http::fake([
             '*/embeddings*' => Http::response('boom', 503),
             '*/chat/completions*' => Http::response([
-                'choices' => [['message' => ['content' => json_encode([
+                'choices' => [['message' => ['content' => self::reply([
                     'answer' => 'still helpful', 'citations' => [],
                 ])]]],
                 'usage' => ['prompt_tokens' => 100, 'completion_tokens' => 50, 'total_tokens' => 150],
@@ -569,7 +576,7 @@ class MessagesRagTest extends TestCase
                 return Http::response(['data' => $data]);
             },
             '*/chat/completions*' => Http::response([
-                'choices' => [['message' => ['content' => json_encode($answer)]]],
+                'choices' => [['message' => ['content' => self::reply($answer)]]],
                 'usage' => ['prompt_tokens' => 900, 'completion_tokens' => 300, 'total_tokens' => 1200],
             ]),
         ]);

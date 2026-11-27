@@ -249,7 +249,6 @@ AZURE_EMBED_API_VERSION=2024-10-21
 AZURE_EMBED_DIMENSIONS=3072
 AZURE_EMBED_TIMEOUT=10
 
-TUTOR_STRUCTURED_OUTPUT=true
 # Salient arm: at most this many citation chips per answer (preregistered: 3).
 TUTOR_MAX_CITATIONS=3
 
@@ -298,6 +297,31 @@ if [ "$cur_index" = "$OLD_INDEX" ] && [ -f "$NEW_INDEX.json" ]; then
   sed -i "s#^RAG_INDEX_PATH=.*#RAG_INDEX_PATH=$NEW_INDEX#" "$APP/.env"
   log ".env: RAG_INDEX_PATH moved from the hyptest pilot index to kb-corpus"
 fi
+
+# The study's chat model, chosen in the 27 Nov 2026 bake-off and preregistered.
+# A pilot .env derived from live inherits live's statsbot_gpt-5-mini; move it only
+# off that exact inherited value (or an empty one) - anything else was set on
+# purpose and is reported, not changed. Live keeps its own model either way.
+STUDY_DEPLOYMENT=statsbot-5.4-mini
+set_env() {  # replace or add one key; logs the value, so never for secrets
+  if grep -q "^$1=" "$APP/.env"; then
+    sed -i "s#^$1=.*#$1=$2#" "$APP/.env"
+  else
+    [ -z "$(tail -c1 "$APP/.env")" ] || echo >> "$APP/.env"
+    echo "$1=$2" >> "$APP/.env"
+  fi
+  log ".env: $1=$2"
+}
+cur_dep="$(sed -n 's/^AZURE_DEPLOYMENT=//p' "$APP/.env" | tail -n1)"
+if [ -z "$cur_dep" ] || [ "$cur_dep" = "statsbot_gpt-5-mini" ]; then
+  set_env AZURE_DEPLOYMENT "$STUDY_DEPLOYMENT"
+  set_env AZURE_MODEL gpt-5.4-mini
+  set_env AZURE_API_VERSION 2025-04-01-preview
+  set_env AZURE_REASONING_EFFORT low
+  cur_dep="$STUDY_DEPLOYMENT"
+fi
+[ "$cur_dep" = "$STUDY_DEPLOYMENT" ] \
+  || log "WARNING: AZURE_DEPLOYMENT=$cur_dep — the study model is $STUDY_DEPLOYMENT"
 
 rag_enabled="$(sed -n 's/^RAG_ENABLED=//p' "$APP/.env" | tail -n1)"
 [ "$rag_enabled" = "true" ] \

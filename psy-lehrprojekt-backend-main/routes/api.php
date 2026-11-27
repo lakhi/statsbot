@@ -175,11 +175,6 @@ Route::post('/messages', function (Request $request) {
         'messages' => TutorPrompt::assemble($messages, $hits, $grounded),
     ];
 
-    //one coherent answer plus a separate citations array, parsed from JSON
-    if ($responseFormat = TutorPrompt::responseFormat()) {
-        $payload['response_format'] = $responseFormat;
-    }
-
     //reasoning models (e.g. gpt-5-mini) reject a custom temperature and use reasoning_effort instead;
     //chat-tuned models (e.g. gpt-4o) use temperature. Switch via .env so the model can be changed
     //without code edits - leave AZURE_REASONING_EFFORT empty to fall back to a chat model.
@@ -195,6 +190,7 @@ Route::post('/messages', function (Request $request) {
         'api-key' => env('AZURE_API_KEY', 'no_key_available'),
     ])->post(env('AZURE_ENDPOINT', 'no_endpoint_available').'/openai/deployments/'.env('AZURE_DEPLOYMENT', 'no_deployment_available').'/chat/completions?api-version='.env('AZURE_API_VERSION', 'no_api_version_available'), $payload);
 
+    //plain text ending in a "CITATIONS: ..." line; parse() splits the two and strips stray ids
     $answer = TutorPrompt::parse($gptResponse['choices'][0]['message']['content'] ?? null, $hits);
 
     //THE point where the RAG arms differ. null = this arm displays no sources;

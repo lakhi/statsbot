@@ -92,9 +92,7 @@ class RegistrationStateTest extends TestCase
         $this->seedStudent(false);
 
         Http::fake(['*/chat/completions*' => Http::response([
-            'choices' => [['message' => ['content' => json_encode([
-                'answer' => 'an answer', 'citations' => [],
-            ])]]],
+            'choices' => [['message' => ['content' => "an answer\n\nCITATIONS: none"]]],
             'usage' => ['prompt_tokens' => 10, 'completion_tokens' => 5, 'total_tokens' => 15],
         ])]);
 
