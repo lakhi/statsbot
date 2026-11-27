@@ -3,17 +3,24 @@
    student's own course materials, so they are meant to be noticed (amber, as in
    the study's condition graphic). The no-RAG and non-salient arms never render
    any of this. */
+/* Stacked: one chip per line, so three long citations read as a short
+   reference list instead of wrapping into each other. */
 .sources {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: flex-start;
   gap: 6px;
   margin-top: 8px;
+  max-width: 100%;
 }
 
 .source-chip {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  max-width: 100%;
+  box-sizing: border-box;
+  white-space: nowrap;
+  cursor: pointer;
   font-size: 0.9em;
   font-weight: 500;
   color: #5c3b00;
@@ -21,6 +28,86 @@
   border: 1px solid #e6a100;
   border-radius: 8px;
   padding: 2px 8px;
+}
+
+.source-chip > mat-icon {
+  margin-right: 4px;
+}
+
+/* Wide screens: one line, read in label order (the DOM puts the topic last for
+   the phone layout below). Who shrinks first when a chip runs out of room: the
+   topic, by far (its shrink factor dwarfs the others), then the course/document
+   part. The slide position never shrinks. */
+.cite-where { order: 1; }
+.cite-topic { order: 2; }
+.cite-pos   { order: 3; }
+
+.cite-topic,
+.cite-where,
+.cite-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cite-topic {
+  flex-shrink: 1000;
+}
+
+.cite-where,
+.cite-label {
+  flex-shrink: 1;
+}
+
+.cite-pos {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* Tapped (or Enter): the full label, wrapped. */
+.source-chip.expanded {
+  white-space: normal;
+  flex-wrap: wrap;
+}
+
+.source-chip.expanded .cite-topic,
+.source-chip.expanded .cite-where,
+.source-chip.expanded .cite-label {
+  overflow: visible;
+}
+
+/* Phones: course · document · slide wrap rather than lose a word ("Einheit…"
+   would hide the unit number), and the topic gets its own second line, where
+   it alone may still shorten. */
+@media (max-width: 600px) {
+  .source-chip {
+    display: block;
+    white-space: normal;
+  }
+
+  .source-chip > mat-icon {
+    vertical-align: -3px;
+  }
+
+  .cite-where,
+  .cite-label {
+    overflow: visible;
+  }
+
+  .cite-topic {
+    display: block;
+    padding-left: 20px;
+    white-space: nowrap;
+    font-weight: 400;
+  }
+
+  .cite-sep {
+    display: none;
+  }
+
+  .source-chip.expanded .cite-topic {
+    white-space: normal;
+  }
 }
 
 /* Salient arm, answer cited nothing: says so, quietly. */

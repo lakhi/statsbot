@@ -95,9 +95,30 @@
          note when the answer cites none. See models/answer.ts. -->
     @if(msg.sources){
       @if(msg.sources.length){
+        <!-- One chip per line. When a label is too long only the topic shortens
+             ("…"); course, document and slide always stay readable - on a phone
+             the topic moves to its own second line. The full label is on hover
+             (title), read by screen readers (aria-label), and shown in place on
+             tap/Enter. The topic comes last in the DOM so the phone layout can
+             put it on that second line; on wider screens CSS order puts it back
+             between document and slide. -->
         <div class="sources">
           @for(source of msg.sources; track source.id){
-            <span class="source-chip"><mat-icon>description</mat-icon>{{source.label}}</span>
+            <span class="source-chip" #chip tabindex="0" role="button"
+                  [title]="source.label" [attr.aria-label]="source.label"
+                  (click)="chip.classList.toggle('expanded')"
+                  (keydown.enter)="chip.classList.toggle('expanded')"><mat-icon>description</mat-icon>
+              @if(source.cite){
+                <span class="cite-where">{{source.cite.course}} · {{source.cite.doc}}</span>
+                <span class="cite-pos">&nbsp;· {{source.cite.pos}}</span>
+                @if(source.cite.topic){
+                  <span class="cite-topic"><span class="cite-sep">:&nbsp;</span>{{source.cite.topic}}</span>
+                }
+              }
+              @else{
+                <span class="cite-label">{{source.label}}</span>
+              }
+            </span>
           }
         </div>
       }

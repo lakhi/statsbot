@@ -205,7 +205,7 @@ describe('ChatComponent', () => {
 
     function chips(): string[] {
       return Array.from(fixture.nativeElement.querySelectorAll('.source-chip'))
-        .map(el => (el as HTMLElement).textContent!.replace('description', '').trim());
+        .map(el => (el as HTMLElement).textContent!.replace('description', '').replace(/\s+/g, ' ').trim());
     }
 
     function hasNote(): boolean {
@@ -236,6 +236,46 @@ describe('ChatComponent', () => {
       expect(chips()).toEqual([]);
       expect(hasNote()).toBeFalse();
       expect(fixture.nativeElement.textContent).not.toMatch(/source|course material|Quelle/i);
+    });
+
+    it('salient: stacks the chips and lets only the topic shorten', () => {
+      const label = 'Statistik für Fortgeschrittene · Einheit 5: Logistische Regressionsanalyse · Folie 25';
+      answer({ content: 'Use it for binary outcomes.', token_left: 1,
+        sources: [{ id: 'sfg-e5-025', label,
+          cite: { course: 'Statistik für Fortgeschrittene', doc: 'Einheit 5',
+                  topic: 'Logistische Regressionsanalyse', pos: 'Folie 25' } },
+                  { id: 'k23-5', label: 'Statistik I · Prüfung SoSe 2023, 1. Termin · Frage 5',
+          cite: { course: 'Statistik I', doc: 'Prüfung SoSe 2023, 1. Termin', topic: null, pos: 'Frage 5' } }] });
+
+      // the full label is what hover and screen readers get (the DOM puts the topic last)
+      const all = Array.from(fixture.nativeElement.querySelectorAll('.source-chip')) as HTMLElement[];
+      expect(all.map(c => c.title)).toEqual([label, 'Statistik I · Prüfung SoSe 2023, 1. Termin · Frage 5']);
+      expect(all.map(c => c.getAttribute('aria-label'))).toEqual(all.map(c => c.title));
+
+      const chip = all[0];
+      expect(chip.querySelector('.cite-where')!.textContent).toContain('Statistik für Fortgeschrittene · Einheit 5');
+      expect(chip.querySelector('.cite-topic')!.textContent).toContain('Logistische Regressionsanalyse');
+      expect(chip.querySelector('.cite-pos')!.textContent).toContain('Folie 25');
+      // an exam chip has no topic part at all
+      expect(fixture.nativeElement.querySelectorAll('.source-chip')[1].querySelector('.cite-topic')).toBeNull();
+
+      const styles = (sel: string) => getComputedStyle(fixture.nativeElement.querySelector(sel));
+      expect(styles('.sources').flexDirection).toBe('column');
+      expect(styles('.cite-topic').textOverflow).toBe('ellipsis');
+      expect(styles('.cite-pos').whiteSpace).toBe('nowrap');
+    });
+
+    it('salient: a tap shows the full label in place', () => {
+      answer({ content: 'x', token_left: 1, sources: [{ id: 'a', label: 'Statistik I · Vorlesung 14: t-Test · Folie 11',
+        cite: { course: 'Statistik I', doc: 'Vorlesung 14', topic: 't-Test', pos: 'Folie 11' } }] });
+      const chip = fixture.nativeElement.querySelector('.source-chip') as HTMLElement;
+
+      chip.click();
+      expect(chip.classList).toContain('expanded');
+      expect(getComputedStyle(chip).whiteSpace).toBe('normal');
+
+      chip.click();
+      expect(chip.classList).not.toContain('expanded');
     });
 
     it('shows students no test tag', () => {
