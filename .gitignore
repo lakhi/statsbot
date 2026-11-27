@@ -36,3 +36,16 @@ CLAUDE.local.md
 # Stray duplicate of the corpus PDF at the repo root; the canonical copy is
 # psy-lehrprojekt-backend-main/resources/kb/hyptest.pdf (byte-identical).
 /hyptest.pdf
+
+# Course material and anything derived from it never enters this PUBLIC repo.
+# The Statistik corpus lives in ../statsbot-rag-corpus and its builds in
+# ../statsbot-rag-build (tools/kb/README.md). Ignored by type, anywhere in the
+# tree, so a copied file is caught even in an unexpected folder. The already
+# public pilot PDF stays tracked; ignore rules never untrack a file.
+*.pdf
+*.pptx
+*.docx
+*.xlsx
+*.jasp
+*.f32
+*.enc

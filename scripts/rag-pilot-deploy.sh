@@ -10,6 +10,17 @@
 #   Deploy:
 #     EXPECT=<sha256> bash /var/www/rag-pilot-deploy.sh
 #
+# THE COURSE-MATERIAL INDEX ARRIVES ENCRYPTED. The release is public and the index
+# holds the lecturers' slides, exams and solutions verbatim, so publish-rag-pilot.sh
+# seals it (AES-256-GCM, tools/kb/seal.py) and this script opens it with the key in
+# the pilot .env (CORPUS_KEY). Paste the key ONCE, without it touching the screen or
+# the shell history:
+#
+#     read -rsp 'CORPUS_KEY: ' k && echo && printf 'CORPUS_KEY=%s\n' "$k" >> /var/www/lehrprojekt-backend-rag/.env && unset k
+#
+# Decryption and its checks run BEFORE anything is applied: a missing or wrong key
+# aborts the deploy and the running stack keeps its current index.
+#
 # ISOLATION IS THE POINT. This script writes to exactly three NEW paths and
 # nothing else:
 #
@@ -105,6 +116,73 @@ for d in backend public-api frontend; do
   [ -d "$tmp/x/$d" ] || die "tarball missing $d/ — wrong asset?"
 done
 
+# --- 2b. open the sealed index, BEFORE anything is applied ---
+# A failure here leaves the running stack (and its index) exactly as it was.
+KB_DIR="$tmp/x/backend/storage/app/kb"
+if ls "$KB_DIR"/*.enc >/dev/null 2>&1; then
+  corpus_key="${CORPUS_KEY:-}"
+  if [ -z "$corpus_key" ] && [ -f "$APP/.env" ]; then
+    corpus_key="$(sed -n 's/^CORPUS_KEY=//p' "$APP/.env" | tail -n1)"
+  fi
+  [ -n "$corpus_key" ] || die "this release carries an encrypted index but no CORPUS_KEY is set. Paste it once:
+    read -rsp 'CORPUS_KEY: ' k && echo && printf 'CORPUS_KEY=%s\n' \"\$k\" >> $APP/.env && unset k
+then re-run this deploy."
+
+  want_model="$( { sed -n 's/^AZURE_EMBED_MODEL=//p' "$APP/.env" 2>/dev/null || true; } | tail -n1)"
+  want_dims="$( { sed -n 's/^AZURE_EMBED_DIMENSIONS=//p' "$APP/.env" 2>/dev/null || true; } | tail -n1)"
+
+  cat > "$tmp/unseal.php" <<'PHP'
+<?php
+// Opens the index sealed by tools/kb/seal.py: b"SBKB1" | 12-byte nonce | ciphertext |
+// 16-byte tag, AES-256-GCM, with the plaintext file NAME as additional data.
+// The key comes from the environment, never from argv (argv shows up in `ps`).
+// argv: dir, expected model, expected dims.
+ini_set('memory_limit', '1G');
+function fail(string $m, int $code) { fwrite(STDERR, $m."\n"); exit($code); }
+
+$key = base64_decode((string) getenv('CORPUS_KEY'), true);
+if ($key === false || strlen($key) !== 32) fail('CORPUS_KEY is not 32 base64-encoded bytes', 2);
+[$dir, $model, $dims] = [$argv[1], $argv[2] ?: 'text-embedding-3-large', (int) ($argv[3] ?: 3072)];
+
+foreach (glob("$dir/*.enc") as $f) {
+    $name = basename($f, '.enc');
+    $raw = file_get_contents($f);
+    if (substr($raw, 0, 5) !== 'SBKB1' || strlen($raw) < 33) fail("$name: not a sealed index file", 3);
+    $plain = openssl_decrypt(substr($raw, 17, -16), 'aes-256-gcm', $key, OPENSSL_RAW_DATA,
+        substr($raw, 5, 12), substr($raw, -16), $name);
+    if ($plain === false) fail("$name: decryption REFUSED - wrong CORPUS_KEY, or the file was altered or renamed", 4);
+    file_put_contents("$dir/$name", $plain);
+    unlink($f);
+}
+
+$pairs = glob("$dir/*.json");
+if (! $pairs) fail('no index sidecar (.json) after decryption', 5);
+foreach ($pairs as $j) {
+    $base = substr($j, 0, -5);
+    $meta = json_decode(file_get_contents($j), true);
+    if (! is_array($meta)) fail(basename($j).': sidecar is not valid JSON', 5);
+    if (($meta['model'] ?? '') !== $model) fail(basename($j).": built with {$meta['model']}, the pilot queries with $model", 6);
+    if ((int) $meta['dims'] !== $dims) fail(basename($j).": {$meta['dims']} dims, the pilot queries with $dims", 6);
+    if (count($meta['chunks'] ?? []) !== (int) $meta['count']) fail(basename($j).': chunk list and count disagree', 6);
+    if (! is_file("$base.f32") || filesize("$base.f32") !== (int) $meta['count'] * (int) $meta['dims'] * 4) {
+        fail(basename($base).'.f32: missing or the wrong size for '.$meta['count'].' x '.$meta['dims'], 6);
+    }
+    printf("%s: %s@%s, %d chunks x %d dims, sidecar sha256 %s\n", basename($base),
+        $meta['doc_id'] ?? '?', $meta['built_at'] ?? '?', $meta['count'], $meta['dims'],
+        substr(hash_file('sha256', $j), 0, 12));
+}
+PHP
+
+  if unsealed="$(CORPUS_KEY="$corpus_key" php "$tmp/unseal.php" "$KB_DIR" "$want_model" "$want_dims" 2>&1)"; then
+    log "index decrypted and checked: $unsealed"
+  else
+    die "index NOT installed — $unsealed"
+  fi
+  unset corpus_key
+else
+  log "NOTE: this release carries no index; the RAG arms will answer ungrounded until one is published"
+fi
+
 # --- 3. back up the PILOT stack only (never production) ---
 if [ -d "$APP" ] || [ -d "$WEB" ]; then
   ts="$(date '+%Y%m%d-%H%M%S')"
@@ -161,7 +239,7 @@ DB_PREFIX=rag_
 # Start UNGROUNDED: prove the parallel stack stands up before adding retrieval.
 # Flip to true (no redeploy needed — config is not cached) for the grounded arm.
 RAG_ENABLED=false
-RAG_INDEX_PATH=/var/www/lehrprojekt-backend-rag/storage/app/kb/kb-hyptest-3large-3072
+RAG_INDEX_PATH=/var/www/lehrprojekt-backend-rag/storage/app/kb/kb-corpus
 RAG_TOP_K=3
 RAG_MIN_SCORE=0.35
 
@@ -201,6 +279,25 @@ ensure_env() {
 }
 ensure_env STUDY_ARM_OVERRIDE true
 ensure_env TUTOR_MAX_CITATIONS 3
+
+# A key handed in on the command line (first install) is kept for the next deploy.
+# Not via ensure_env: that logs the value.
+if [ -n "${CORPUS_KEY:-}" ] && ! grep -q '^CORPUS_KEY=' "$APP/.env"; then
+  [ -z "$(tail -c1 "$APP/.env")" ] || echo >> "$APP/.env"
+  printf 'CORPUS_KEY=%s\n' "$CORPUS_KEY" >> "$APP/.env"
+  log ".env: added CORPUS_KEY (value not logged)"
+fi
+
+# The pilot started on the hyptest index; the corpus now installs under a stable
+# name. Move the path only off that exact old default - any other value was set
+# on purpose and is left alone.
+OLD_INDEX="$APP/storage/app/kb/kb-hyptest-3large-3072"
+NEW_INDEX="$APP/storage/app/kb/kb-corpus"
+cur_index="$(sed -n 's/^RAG_INDEX_PATH=//p' "$APP/.env" | tail -n1)"
+if [ "$cur_index" = "$OLD_INDEX" ] && [ -f "$NEW_INDEX.json" ]; then
+  sed -i "s#^RAG_INDEX_PATH=.*#RAG_INDEX_PATH=$NEW_INDEX#" "$APP/.env"
+  log ".env: RAG_INDEX_PATH moved from the hyptest pilot index to kb-corpus"
+fi
 
 rag_enabled="$(sed -n 's/^RAG_ENABLED=//p' "$APP/.env" | tail -n1)"
 [ "$rag_enabled" = "true" ] \
@@ -258,6 +355,15 @@ else
   ragcount="probe failed: $(cat "$tmp/rag.out" "$tmp/rag.err" | tr '\n' ' ' | cut -c1-300)"
 fi
 log "PILOT tables: $ragcount"
+
+# KbRetriever fails soft on purpose, so a broken index would otherwise only show
+# as both RAG arms quietly answering like no-RAG. Say it here, loudly.
+if kbstatus="$(cd "$APP" && php artisan kb:status 2>&1)"; then
+  log "kb:status OK"
+else
+  log "WARNING: kb:status FAILED — the RAG arms are answering UNGROUNDED"
+fi
+echo "$kbstatus" | sed 's/^/    /' | tee -a "$LOG"
 
 echo "$got" > "$STATE"
 log "=== deploy done — RAG_ENABLED=$(grep -oP '(?<=^RAG_ENABLED=).*' "$APP/.env" || echo '?') ==="

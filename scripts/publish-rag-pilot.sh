@@ -17,8 +17,13 @@
 #   public-api/  -> /var/www/html/rag-pilot-test-api/   (index.php + .htaccess)
 #   frontend/    -> /var/www/html/rag-pilot-test/       (Angular, base-href /rag-pilot-test/)
 #
-# It also carries the built KB index, which is gitignored and therefore has no
-# other route to the pod.
+# It also carries the built KB index - ENCRYPTED. The index holds the course
+# materials verbatim (slides, exams, solutions) and this repository and its
+# releases are public, so only ciphertext may leave this machine. The key lives
+# in the macOS Keychain (tools/kb/seal.py keygen) and in the pilot .env.
+#
+#   KB_INDEX=<path without extension>   the index to ship (default: the build folder)
+#   DRY_RUN=1                           build + check the tarball, skip git checks and upload
 set -euo pipefail
 
 REPO="lakhi/statsbot"
@@ -27,32 +32,57 @@ ASSET="statsbot-rag-pilot.tgz"
 FRONTEND_DIR="psy-lehrprojekt-frontend-client-main"
 BACKEND_DIR="psy-lehrprojekt-backend-main"
 BUILD_OUT="dist/lehrprojekt-client/browser"
-INDEX_STEM="kb-hyptest-3large-3072"
 PODS_LIST="https://console-openshift-console.web.univie.ac.at/k8s/ns/lehrprojeg67/pods"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-# --- 0. the index must exist; it is a build artifact, not a repo file ---
-idx="$BACKEND_DIR/storage/app/kb/$INDEX_STEM"
-if [ ! -f "$idx.f32" ] || [ ! -f "$idx.json" ]; then
-  echo "ERROR: $idx.{f32,json} missing." >&2
-  echo "Rebuild it: see $BACKEND_DIR/tools/kb/README.md" >&2
+# Outside the repository on purpose: nothing derived from the corpus is ever
+# under version control here (tools/kb/README.md).
+KB_INDEX="${KB_INDEX:-$(dirname "$ROOT")/statsbot-rag-build/index/kb-corpus}"
+DRY_RUN="${DRY_RUN:-}"
+
+# seal.py needs `cryptography`; any python3 that has it will do
+KB_PY=("${KB_PY:-python3}")
+if ! "${KB_PY[@]}" -c 'import cryptography' 2>/dev/null; then
+  command -v uv >/dev/null || { echo "ERROR: ${KB_PY[*]} lacks 'cryptography' and uv is not installed" >&2; exit 1; }
+  KB_PY=(uv run --no-project --quiet --with 'cryptography>=42' python)
+fi
+
+# --- 0. the index must exist, and must be sealable ---
+if [ ! -f "$KB_INDEX.f32" ] || [ ! -f "$KB_INDEX.json" ]; then
+  echo "ERROR: $KB_INDEX.{f32,json} missing." >&2
+  echo "Build it: see $BACKEND_DIR/tools/kb/README.md" >&2
   exit 1
 fi
-echo "==> index present: $(basename "$idx").f32 ($(wc -c < "$idx.f32") bytes)"
+read -r KB_FINGERPRINT < <("${KB_PY[@]}" - "$KB_INDEX.json" <<'PY'
+import hashlib, json, sys
+p = sys.argv[1]
+m = json.load(open(p))
+print(f"{m.get('doc_id')}@{m.get('built_at')} {m['count']} chunks x {m['dims']} dims, "
+      f"sidecar sha256 {hashlib.sha256(open(p, 'rb').read()).hexdigest()[:12]}")
+PY
+)
+echo "==> index: $KB_INDEX — $KB_FINGERPRINT"
+"${KB_PY[@]}" "$BACKEND_DIR/tools/kb/seal.py" seal --help >/dev/null
+if [ -z "${CORPUS_KEY:-}" ] && ! security find-generic-password -s statsbot-corpus-key -a statsbot >/dev/null 2>&1; then
+  echo "ERROR: no corpus key. Create it once: ${KB_PY[*]} $BACKEND_DIR/tools/kb/seal.py keygen" >&2
+  exit 1
+fi
 
 # --- 0b. the pod re-fetches the deploy script BY COMMIT, so that commit must be on GitHub ---
 # The pod keeps its own copy of rag-pilot-deploy.sh from whenever it was installed.
 # A release that relies on a newer deploy script is only safe if the paste line
 # below replaces that copy first - and it can only fetch what has been pushed.
 DEPLOY_SCRIPT="scripts/rag-pilot-deploy.sh"
-git diff --quiet HEAD -- "$DEPLOY_SCRIPT" \
-  || { echo "ERROR: $DEPLOY_SCRIPT has uncommitted changes — commit and push first" >&2; exit 1; }
 DEPLOY_REV="$(git rev-parse HEAD)"
-git fetch -q origin
-git branch -r --contains "$DEPLOY_REV" | grep -q . \
-  || { echo "ERROR: HEAD ${DEPLOY_REV:0:7} is not on GitHub — push first (the pod fetches the deploy script by commit)" >&2; exit 1; }
+if [ -z "$DRY_RUN" ]; then
+  git diff --quiet HEAD -- "$DEPLOY_SCRIPT" \
+    || { echo "ERROR: $DEPLOY_SCRIPT has uncommitted changes — commit and push first" >&2; exit 1; }
+  git fetch -q origin
+  git branch -r --contains "$DEPLOY_REV" | grep -q . \
+    || { echo "ERROR: HEAD ${DEPLOY_REV:0:7} is not on GitHub — push first (the pod fetches the deploy script by commit)" >&2; exit 1; }
+fi
 DEPLOY_SHA256="$(shasum -a 256 "$DEPLOY_SCRIPT" | awk '{print $1}')"
 echo "==> deploy script pinned to ${DEPLOY_REV:0:7} (sha256 ${DEPLOY_SHA256:0:12}…)"
 
@@ -72,7 +102,11 @@ echo "==> Frontend OK (base-href and pilot API URL both present)"
 
 # --- 2. assemble the tarball ---
 work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT
+if [ -n "$DRY_RUN" ]; then
+  echo "==> DRY_RUN: work dir kept at $work"
+else
+  trap 'rm -rf "$work"' EXIT
+fi
 stage="$work/stage"
 mkdir -p "$stage/backend" "$stage/public-api" "$stage/frontend"
 
@@ -95,11 +129,18 @@ tar -cf - -C "$BACKEND_DIR" \
     --exclude='./composer.phar' \
     --exclude='./.phpunit.result.cache' \
     --exclude='./bootstrap/cache/*.php' \
+    --exclude='./resources/kb' \
+    --exclude='./storage/app/kb' \
+    --exclude='./.venv-kb' \
     . | tar -xf - -C "$stage/backend"
 
-# the built index (gitignored, so it can only travel this way)
-mkdir -p "$stage/backend/storage/app/kb"
-cp "$idx.f32" "$idx.json" "$stage/backend/storage/app/kb/"
+# The index, sealed. It is copied under the stable name the pod expects, because
+# the file name is bound into the ciphertext: a renamed file will not open.
+mkdir -p "$work/plain" "$stage/backend/storage/app/kb"
+cp "$KB_INDEX.f32" "$work/plain/kb-corpus.f32"
+cp "$KB_INDEX.json" "$work/plain/kb-corpus.json"
+"${KB_PY[@]}" "$BACKEND_DIR/tools/kb/seal.py" seal "$work/plain/kb-corpus.f32" "$work/plain/kb-corpus.json" \
+    --out "$stage/backend/storage/app/kb" | sed 's/^/    /'
 
 # writable dirs Laravel needs but git does not carry
 mkdir -p "$stage/backend/storage/framework/cache/data" \
@@ -167,12 +208,42 @@ for slug in $TEST_SLUGS; do
 done
 echo "==> Test URL folders staged: $TEST_SLUGS"
 
+# --- 2b. LEAK GUARD: nothing readable from the corpus may reach a public URL ---
+# Last line of defence, after the excludes above: refuse on any vector file,
+# unsealed sidecar, office/PDF document, or any of 25 chunk-text samples found
+# anywhere in what is about to be uploaded.
+leaks="$(find "$stage" -type f \( -name '*.f32' -o -name 'kb-*.json' -o -name 'chunks*.json' \
+    -o -iname '*.pdf' -o -iname '*.pptx' -o -iname '*.docx' -o -iname '*.xlsx' -o -iname '*.jasp' \) \
+    | sed "s#^$stage/##")"
+[ -z "$leaks" ] || { echo "ERROR: LEAK GUARD — corpus files in the stage:" >&2; echo "$leaks" | sed 's/^/    /' >&2; exit 1; }
+
+"${KB_PY[@]}" - "$KB_INDEX.json" > "$work/canaries.txt" <<'PY'
+import json, random, sys
+chunks = json.load(open(sys.argv[1]))["chunks"]
+rng = random.Random(len(chunks))
+texts = [" ".join(c["text"].split()) for c in chunks]
+texts = [t for t in texts if len(t) >= 80]
+for t in rng.sample(texts, min(25, len(texts))):
+    start = rng.randrange(0, len(t) - 50)
+    print(t[start:start + 50])
+PY
+[ -s "$work/canaries.txt" ] || { echo "ERROR: LEAK GUARD — could not sample canaries from $KB_INDEX.json" >&2; exit 1; }
+if hits="$(grep -rlF -f "$work/canaries.txt" "$stage")"; then
+  echo "ERROR: LEAK GUARD — course text found in:" >&2; echo "$hits" | sed "s#^$stage/#    #" >&2; exit 1
+fi
+echo "==> Leak guard passed: no corpus files, and none of $(wc -l < "$work/canaries.txt" | tr -d ' ') text samples appear in the stage"
+
 tgz="$work/$ASSET"
 COPYFILE_DISABLE=1 tar --no-mac-metadata -czf "$tgz" -C "$stage" . 2>/dev/null \
   || tar -czf "$tgz" -C "$stage" .
 sha="$(shasum -a 256 "$tgz" | awk '{print $1}')"
 echo "$sha  $ASSET" > "$tgz.sha256"
 echo "==> Packaged $ASSET — sha256: $sha ($(wc -c < "$tgz") bytes)"
+
+if [ -n "$DRY_RUN" ]; then
+  echo "==> DRY_RUN: not uploading. Tarball: $tgz"
+  exit 0
+fi
 
 # --- 3. publish ---
 if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
@@ -196,6 +267,15 @@ Next: apply it on the pod.
     one this release needs (pinned to ${DEPLOY_REV:0:7}, hash-checked), then deploys:
 
     curl -fsSL https://raw.githubusercontent.com/$REPO/$DEPLOY_REV/$DEPLOY_SCRIPT -o /tmp/rag-pilot-deploy.sh && echo "$DEPLOY_SHA256  /tmp/rag-pilot-deploy.sh" | sha256sum -c - && cp /tmp/rag-pilot-deploy.sh /var/www/rag-pilot-deploy.sh && chmod +x /var/www/rag-pilot-deploy.sh && EXPECT=$sha bash /var/www/rag-pilot-deploy.sh
+
+    The index in this release: $KB_FINGERPRINT
+    The deploy log should show the same line after "index decrypted and checked".
+    If it stops with "no CORPUS_KEY is set", paste the key ONCE (copy it here with
+    \`security find-generic-password -s statsbot-corpus-key -a statsbot -w | pbcopy\`):
+
+    read -rsp 'CORPUS_KEY: ' k && echo && printf 'CORPUS_KEY=%s\n' "\$k" >> /var/www/lehrprojekt-backend-rag/.env && unset k
+
+    then paste the deploy line again.
 
  4. Only if the deploy log printed "WARNING: RAG_ENABLED" — turn retrieval on:
 

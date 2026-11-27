@@ -89,6 +89,24 @@ def truncate(v, d):
     return l2_normalise(v[:d])
 
 
+# What KbRetriever reads per chunk. `citation` is the full chip label and the
+# cite_* fields its parts (the UI shortens only the topic); see tools/kb/README.md.
+SIDECAR_REQUIRED = ("id", "text")
+SIDECAR_OPTIONAL = ("doc_id", "doc_title", "heading_chain", "page_start", "page_end", "n_tokens",
+                    "citation", "cite_course", "cite_doc", "cite_topic", "cite_pos",
+                    "course", "doc_type", "year", "source_file")
+
+
+def sidecar_chunk(c):
+    missing = [k for k in SIDECAR_REQUIRED if k not in c]
+    if missing:
+        raise SystemExit(f"chunk {c.get('id', '?')} lacks {missing}")
+    out = {k: c[k] for k in SIDECAR_REQUIRED}
+    out.update({k: c[k] for k in SIDECAR_OPTIONAL if k in c})
+    out.setdefault("heading_chain", [])
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--chunks", required=True, type=Path)
@@ -99,7 +117,13 @@ def main():
     ap.add_argument("--api-version", default="2024-10-21")
     ap.add_argument("--dims", type=int, nargs="+", required=True,
                     help="first value is the full width to request; the rest are derived locally")
-    ap.add_argument("--source-pdf", type=Path)
+    ap.add_argument("--source-pdf", type=Path,
+                    help="single-document corpora: recorded as source_pdf_sha256")
+    ap.add_argument("--source-manifest", type=Path,
+                    help="multi-document corpora: the manifest the chunks were built from, recorded as source_sha256")
+    ap.add_argument("--corpus-id", help="top-level doc_id (default: the first chunk's doc_id)")
+    ap.add_argument("--stem", help="output name for the FIRST --dims value, e.g. kb-corpus "
+                                   "(the stable name the pod expects); further dims get <stem>-<d>")
     ap.add_argument("--out-dir", required=True, type=Path)
     args = ap.parse_args()
 
@@ -109,11 +133,14 @@ def main():
 
     chunks = json.loads(args.chunks.read_text())
     texts = [c["text"] for c in chunks]
-    doc_id = chunks[0]["doc_id"] if chunks else "kb"
+    doc_id = args.corpus_id or (chunks[0]["doc_id"] if chunks else "kb")
 
     src_sha = ""
     if args.source_pdf and args.source_pdf.exists():
         src_sha = hashlib.sha256(args.source_pdf.read_bytes()).hexdigest()
+    manifest_sha = ""
+    if args.source_manifest and args.source_manifest.exists():
+        manifest_sha = hashlib.sha256(args.source_manifest.read_bytes()).hexdigest()
 
     full = args.dims[0]
     print(f"embedding {len(texts)} chunks via {args.deployment} @ {full}d")
@@ -142,7 +169,10 @@ def main():
             continue
         rows = [l2_normalise(v) if d == full else truncate(v, d) for v in vectors]
 
-        stem = f"kb-{doc_id}-{args.tag}-{d}"
+        if args.stem:
+            stem = args.stem if d == args.dims[0] else f"{args.stem}-{d}"
+        else:
+            stem = f"kb-{doc_id}-{args.tag}-{d}"
         blob = b"".join(struct.pack(f"<{d}f", *r) for r in rows)
         (args.out_dir / f"{stem}.f32").write_bytes(blob)
 
@@ -160,12 +190,8 @@ def main():
             "dtype": "float32",
             "byte_order": "little",
             "source_pdf_sha256": src_sha,
-            "chunks": [
-                {k: c[k] for k in
-                 ("id", "doc_id", "doc_title", "heading_chain",
-                  "page_start", "page_end", "n_tokens", "text")}
-                for c in chunks
-            ],
+            "source_sha256": manifest_sha,
+            "chunks": [sidecar_chunk(c) for c in chunks],
         }
         (args.out_dir / f"{stem}.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False))
         print(f"  wrote {stem}.f32 ({len(blob):,} B) + {stem}.json")

@@ -22,18 +22,54 @@ resources/kb/hyptest.pdf
 
 ## Where the corpus lives
 
-`resources/kb/` holds the source documents and everything derived from them that a
-rebuild needs — the PDF, the docling extraction, the QA patch and the gold set. They
-are committed, so a fresh clone can rebuild the index without hunting for files.
+**This repository is public, so the Statistik corpus never enters it — not the
+PDFs, not anything derived from them.** Two sibling folders, next to the repo:
 
-Note that **this repository is public**, which means the course material in
-`resources/kb/` is publicly downloadable and stays in git history once pushed. That
-was a deliberate call for the pilot (2026-09-02) on the grounds that it is a trial;
-it will want revisiting before a wider corpus of other people's teaching material
-goes in.
+```
+~/Developer/uni-studAsst-projects/
+  statsbot/                  this repo (public)
+  statsbot-rag-corpus/       the course materials, as downloaded. Read-only.
+  statsbot-rag-build/        everything derived: docling JSON, chunks, manifest,
+                             QA patches, gold set (it holds real student questions),
+                             and index/kb-corpus.{f32,json}
+```
 
-`storage/app/` is gitignored, so built indexes stay out of the repo and ship inside
-the release asset, the same way the frontend bundle does.
+Back up the hand-made files in `statsbot-rag-build/` (manifest, patches, gold set)
+somewhere private — they are deliberately not in git.
+
+Guards, so a slip is caught rather than published: the root `.gitignore` ignores
+`*.pdf *.pptx *.docx *.xlsx *.jasp *.f32 *.enc` anywhere, and `resources/kb/` is a
+whitelist that admits only the pilot files below.
+
+`resources/kb/` still holds the 4-page pilot notes (`hyptest.*`) and their gold set.
+Those were made public deliberately on 2026-09-02 and stay as a small worked example;
+a public push is not undoable, so removing them now would change nothing.
+
+## Shipping the index: sealed
+
+The index sidecar holds every chunk's text verbatim (the backend pastes it into the
+prompt), and the release asset is public. So `scripts/publish-rag-pilot.sh` ships the
+index **encrypted** and the pod decrypts it during the deploy:
+
+- `seal.py` — AES-256-GCM (`cryptography`); format `SBKB1 | nonce | ciphertext | tag`,
+  with the file name as additional data, so the two files cannot be swapped or renamed.
+- **Key:** 32 random bytes, created once with `python3 tools/kb/seal.py keygen`. It
+  lives only in the macOS Keychain (service `statsbot-corpus-key`) and in the pilot
+  `.env` on the pod (`CORPUS_KEY`, pasted once with `read -rs`, see
+  `scripts/rag-pilot-deploy.sh`). Lose it and nothing is lost: make a new one,
+  re-publish, paste it again.
+- The index always installs as `storage/app/kb/kb-corpus.{f32,json}`. Its version is
+  inside the sidecar (`doc_id@built_at`, stamped on every history row as
+  `kb_version`), so a new corpus never needs a `.env` edit.
+- **Leak guard:** before uploading, publish refuses if the stage contains any `.f32`,
+  unsealed sidecar, office/PDF file, or any of 25 random chunk-text samples.
+- The deploy decrypts and checks the index (model, dims, size, JSON) *before*
+  applying anything, and runs `php artisan kb:status` afterwards. Run that command by
+  hand whenever in doubt: `KbRetriever` fails soft, so a broken index otherwise only
+  shows as both RAG arms answering like no-RAG.
+
+Try a publish without uploading: `DRY_RUN=1 KB_INDEX=<path without extension>
+scripts/publish-rag-pilot.sh`.
 
 ## Setup
 
@@ -76,13 +112,25 @@ $PY tools/kb/eval.py --gold resources/kb/gold-questions.json \
 ## Citation labels (contract with the backend)
 
 In the salient study arm, every answer shows chips naming the course material it drew
-on, e.g. **`Vorlesung 14: t-Test I, Folie 12`**. The backend does not construct that
-string: only the pipeline knows whether a page is a slide, a handout page or an exam
-question. So each chunk in the index JSON should carry it:
+on, e.g. **`Statistik I · Vorlesung 14: t-Test · Folie 11`**. The backend does not
+construct that string: only the pipeline knows whether a page is a slide, a handout
+page or an exam question. So each chunk in the index JSON carries it, plus its parts:
 
 ```json
-{ "id": "stat1-v14-012", "citation": "Vorlesung 14: t-Test I, Folie 12", ... }
+{ "id": "stat1-v14-011",
+  "citation":    "Statistik I · Vorlesung 14: t-Test · Folie 11",
+  "cite_course": "Statistik I",
+  "cite_doc":    "Vorlesung 14",
+  "cite_topic":  "t-Test",
+  "cite_pos":    "Folie 11", ... }
 ```
+
+- Format: `<Kurs> · <Dokument>: <Thema> · <Stelle>`. The topic is the document's own
+  chapter heading at that slide (never a file name), and is omitted for exams, which mix
+  topics. Chips are stacked one per line; when one runs out of room only `cite_topic`
+  shortens, so course, document and position always stay readable.
+- `Folie N` is the slide number students can see: the printed number in Statistik I
+  decks, the page number in the Statistik II and Fortgeschrittene decks (which print none).
 
 - One label per *source a student would recognise*. The backend dedupes chips by label,
   so two chunks of the same slide should get the same `citation`.
@@ -90,8 +138,13 @@ question. So each chunk in the index JSON should carry it:
 - Optional for backwards compatibility: without it, `KbRetriever` falls back to
   `"<heading chain>, p. <page_start>"`, which is what the hyptest pilot index shows.
 
-**Chunk `text` must not name its source.** The model sees each excerpt as `[id]` plus its
-text, and nothing else, in BOTH RAG arms. So strip running headers and footers that
+**Chunk `text` starts with a topic line and must not name its source.** E.g.
+`Thema: Varianzanalytische Methoden › Einfaktorielle Versuchspläne: Post-hoc Tests`,
+built from the document's own headings — topic only, never a course, lecture number,
+"Folie" or "Prüfung". Exam chunks additionally start with the neutral marker
+`Multiple-choice item: the listed statements may be false.`, because the exams carry no
+answer key and their distractors are false on purpose. The model sees each excerpt as
+`[id]` plus its text, and nothing else, in BOTH RAG arms. So strip running headers and footers that
 identify the document ("Vorlesung 14 | Folie 12", course name, lecturer, page numbers).
 Keep the slide's own title, which is content. Otherwise the model is handed "Vorlesung 14"
 in the non-salient arm too, and only a prompt instruction stops it from writing "wie in

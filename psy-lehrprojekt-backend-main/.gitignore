@@ -22,3 +22,12 @@ yarn-error.log
 # Offline KB build tools (Python)
 /tools/kb/__pycache__
 /.venv-kb
+
+# A whitelist: a new file in resources/kb/ is ignored unless named here. Only the
+# 4-page pilot notes (public since 2026-09-02) and our own gold questions are
+# allowed; the Statistik corpus lives outside the repo (tools/kb/README.md).
+/resources/kb/*
+!/resources/kb/hyptest.pdf
+!/resources/kb/hyptest.docling.json
+!/resources/kb/hyptest.patch.json
+!/resources/kb/gold-questions.json

@@ -2,3 +2,4 @@
 # the pod runs plain PHP with no new Composer packages.
 docling==2.124.0
 tiktoken==0.14.0
+cryptography>=42  # seal.py: AES-256-GCM for the index shipped in the public release
