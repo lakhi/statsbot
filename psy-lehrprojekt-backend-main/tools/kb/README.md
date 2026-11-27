@@ -45,6 +45,43 @@ whitelist that admits only the pilot files below.
 Those were made public deliberately on 2026-09-02 and stay as a small worked example;
 a public push is not undoable, so removing them now would change nothing.
 
+## Building the Statistik corpus index
+
+The real corpus (~2,100 pages: lecture decks, exams, exercise solutions, handouts) goes
+through a different extraction than the 4-page pilot, chosen on a 21-page probe
+(2026-11-27): **docling fails on the PowerPoint-exported decks** (it files whole slides
+as pictures and drops their formulas), `pdftotext` garbles maths and cannot see text
+inside images, and an image alone misses text a click animation hides. So each page is
+transcribed by an EU chat deployment from **its image and its text layer together**.
+
+```
+BUILD=../statsbot-rag-build   # outside the repo; holds everything below
+PY=$BUILD/.venv-kb/bin/python  # uv venv + tools/kb/requirements.txt
+export AZURE_API_KEY=$(az cognitiveservices account keys list -n statistics-tutor -g Lehrprojekt --query key1 -o tsv)
+
+# 0. inventory.tsv + manifest_{docs,pages}.tsv: corpus-specific, kept in $BUILD
+#    (labels from the documents' own headings; organisational pages, exam covers,
+#    numeric tables excluded; see $BUILD/manifest_review.md)
+# 1. transcribe every page (resumable; ~$11 and ~1 h for the corpus)
+$PY tools/kb/transcribe.py --build $BUILD --corpus ../statsbot-rag-corpus
+# 2. check each transcript against its page's text layer; re-run flagged pages
+$PY tools/kb/qa_transcripts.py $BUILD --list
+# 3. chunk: one per slide / exam question / Aufgabe / handout page, ≤650 tokens
+$PY tools/kb/chunk_transcripts.py --build $BUILD
+# 4. embed at full width under the stable name the pod expects
+$PY tools/kb/embed.py --chunks $BUILD/chunks.json --deployment statsbot-embed-3-large \
+    --model text-embedding-3-large --tag 3large --dims 3072 --stem kb-corpus \
+    --corpus-id statistik --source-manifest $BUILD/manifest_pages.tsv --out-dir $BUILD/index
+# 5. collapse near-duplicates (same exercise across years, animation builds)
+$PY tools/kb/dedupe.py $BUILD/index/kb-corpus --threshold 0.97
+# 6. ship: KB_INDEX=$BUILD/index/kb-corpus scripts/publish-rag-pilot.sh
+```
+
+Source-identifying lines (lecturer and tutor names, course footers) are stripped by
+patterns in `$BUILD/strip_patterns.txt`, which stays out of this repo because it names
+people. Chunk ids are opaque hashes for the same reason the text is scrubbed: the model
+sees `[id]` + text in both RAG arms.
+
 ## Shipping the index: sealed
 
 The index sidecar holds every chunk's text verbatim (the backend pastes it into the

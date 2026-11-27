@@ -46,7 +46,7 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-BATCH = 64  # inputs per request; 13 chunks fits in one
+BATCH = 32  # inputs per request; use --batch 8 --tpm 40000 for a full corpus on a 50k TPM deployment
 
 
 def embed_batch(endpoint, deployment, api_version, key, inputs, dims=None):
@@ -60,7 +60,9 @@ def embed_batch(endpoint, deployment, api_version, key, inputs, dims=None):
         headers={"Content-Type": "application/json", "api-key": key},
         method="POST",
     )
-    for attempt in range(5):
+    # A full corpus is ~1.5M tokens against a 50k tokens/minute deployment, so being
+    # throttled is the normal case: wait as long as Azure says (retry-after), not a fixed backoff.
+    for attempt in range(20):
         try:
             with urllib.request.urlopen(req, timeout=120) as r:
                 body = json.loads(r.read())
@@ -68,12 +70,15 @@ def embed_batch(endpoint, deployment, api_version, key, inputs, dims=None):
             return [r["embedding"] for r in rows], body.get("usage", {})
         except urllib.error.HTTPError as e:
             detail = e.read().decode()[:400]
-            if e.code in (429, 500, 502, 503) and attempt < 4:
-                wait = 2 ** attempt
-                print(f"  HTTP {e.code}, retrying in {wait}s…", file=sys.stderr)
-                time.sleep(wait)
+            if e.code in (429, 500, 502, 503) and attempt < 19:
+                wait = float(e.headers.get("retry-after") or 0) or min(60, 2 ** attempt)
+                print(f"  HTTP {e.code}, retrying in {wait:.0f}s…", file=sys.stderr)
+                time.sleep(wait + 1)
                 continue
             raise SystemExit(f"Azure embeddings failed: HTTP {e.code}\n{detail}")
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+            print(f"  network error ({e}), retrying…", file=sys.stderr)
+            time.sleep(min(60, 5 * (attempt + 1)))
     raise SystemExit("Azure embeddings failed after retries")
 
 
@@ -125,6 +130,9 @@ def main():
     ap.add_argument("--stem", help="output name for the FIRST --dims value, e.g. kb-corpus "
                                    "(the stable name the pod expects); further dims get <stem>-<d>")
     ap.add_argument("--out-dir", required=True, type=Path)
+    ap.add_argument("--batch", type=int, default=BATCH, help="inputs per request")
+    ap.add_argument("--tpm", type=int, default=0,
+                    help="pace to this many tokens/minute (e.g. 40000 for a 50k TPM deployment); 0 = no pacing")
     args = ap.parse_args()
 
     key = os.environ.get("AZURE_API_KEY")
@@ -145,14 +153,23 @@ def main():
     full = args.dims[0]
     print(f"embedding {len(texts)} chunks via {args.deployment} @ {full}d")
 
+    # Pace to the deployment's tokens-per-minute budget: Azure enforces it over short
+    # windows, so a big request against a small deployment is refused outright, and a
+    # fast loop of small ones is throttled. Small batches + pacing keep it flowing.
     vectors, total_usage = [], 0
-    for i in range(0, len(texts), BATCH):
-        batch = texts[i:i + BATCH]
+    started = time.time()
+    for i in range(0, len(texts), args.batch):
+        batch = texts[i:i + args.batch]
         vecs, usage = embed_batch(args.endpoint, args.deployment, args.api_version,
                                   key, batch, dims=full)
         vectors.extend(vecs)
         total_usage += usage.get("total_tokens", 0)
-        print(f"  batch {i // BATCH + 1}: {len(batch)} inputs, {usage.get('total_tokens', 0)} tokens")
+        print(f"  batch {i // args.batch + 1}: {len(batch)} inputs, {usage.get('total_tokens', 0)} tokens",
+              flush=True)
+        if args.tpm:
+            ahead = total_usage / args.tpm * 60 - (time.time() - started)
+            if ahead > 0:
+                time.sleep(ahead)
 
     if len(vectors) != len(texts):
         raise SystemExit(f"expected {len(texts)} vectors, got {len(vectors)}")
