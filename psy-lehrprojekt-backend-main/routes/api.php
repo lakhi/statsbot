@@ -158,9 +158,11 @@ Route::post('/messages', function (Request $request) {
     $arm = StudyArm::effective($request, $student);
     $grounded = config('tutor.rag_enabled') && StudyArm::retrieves($arm);
 
+    //two searches, one embeddings call: the latest message alone, and the
+    //previous student message + the latest (see KbRetriever::queriesFor)
     $retriever = app(KbRetriever::class);
     $hits = $grounded
-        ? $retriever->search(end($messages)['content'] ?? '')
+        ? $retriever->search(KbRetriever::queriesFor($messages))
         : [];
 
     $payload = [
@@ -217,8 +219,10 @@ Route::post('/messages', function (Request $request) {
     //Rows before and after grounding goes live are otherwise indistinguishable,
     //and that cannot be reconstructed after the fact.
     $history->kb_version = $grounded ? $retriever->version() : null;
+    //q: which search matched the chunk - 0 = the latest message alone,
+    //1 = previous student message + latest (KbRetriever::queriesFor)
     $history->kb_chunks = $hits ? json_encode(array_map(
-        fn ($h) => ['id' => $h['id'], 'score' => $h['score']], $hits
+        fn ($h) => ['id' => $h['id'], 'score' => $h['score'], 'q' => $h['q']], $hits
     )) : null;
     $history->grounded = $answer['sources'] !== [];
 
@@ -349,10 +353,16 @@ Route::get('/study/monitor', function (Request $request) {
 
     usort($ledger, fn ($a, $b) => strcmp((string) $a['claimed_at'], (string) $b['claimed_at']));
 
+    //which corpus the RAG arms are answering from, and whether it loads at all:
+    //KbRetriever fails soft, so a broken index would otherwise only show up as
+    //both RAG arms quietly answering like no-RAG
+    $index = app(KbRetriever::class)->status();
+
     $payload = [
         'phase' => $phase,
         'rag_enabled' => (bool) config('tutor.rag_enabled'),
         'arm_override' => (bool) config('study.arm_override'),
+        'index' => $index,
         'buckets' => $buckets,
         'slots_remaining' => $remaining,
         'ledger' => $ledger,
@@ -414,6 +424,10 @@ Route::get('/study/monitor', function (Request $request) {
         .'<p>phase: <b>'.e($phase).'</b> &middot; RAG_ENABLED: <b>'
         .(config('tutor.rag_enabled') ? 'true' : 'false').'</b> &middot; arm override: <b>'
         .(config('study.arm_override') ? 'ON' : 'off').'</b></p>'
+        .'<p>index: '.($index['ok']
+            ? '<b>'.e((string) $index['version']).'</b> &middot; '.(int) $index['chunks'].' chunks ('
+                .(int) $index['with_citations'].' with citations) &middot; sha256 '.e(substr((string) $index['sha256'], 0, 12))
+            : '<b style="color:#b00">NOT LOADABLE</b> &middot; '.e((string) $index['error'])).'</p>'
         .'<h2>Buckets</h2><table><tr><th>stratum</th>'.$armHeaders.'<th>slots left</th></tr>'
         .$counts.'</table>'
         .'<h2>Claim ledger</h2><table><tr><th>seq</th><th>stratum</th><th>arm</th><th>uid</th>'

@@ -19,7 +19,10 @@ return [
     // Index basename, WITHOUT extension. The retriever reads "<path>.f32" and
     // "<path>.json" and refuses to run if the sidecar disagrees with the embed
     // config below - a mismatched model retrieves plausible nonsense in silence.
-    'index_path' => env('RAG_INDEX_PATH', storage_path('app/kb/kb-hyptest-3large-3072')),
+    // The name is stable across corpus versions (the version lives in the
+    // sidecar and is stamped on every history row as kb_version), so a new
+    // corpus never needs a .env edit. It arrives encrypted - see tools/kb/README.md.
+    'index_path' => env('RAG_INDEX_PATH', storage_path('app/kb/kb-corpus')),
 
     // How many chunks may be injected.
     'top_k' => (int) env('RAG_TOP_K', 3),
@@ -38,6 +41,18 @@ return [
     | anything to the materials that the injected chunks do not support.
     */
     'min_score' => (float) env('RAG_MIN_SCORE', 0.35),
+
+    /*
+    | Two-step scan (see KbRetriever::rank). Every chunk is first scored on its
+    | leading `coarse_dims` values - text-embedding-3-* is Matryoshka-trained,
+    | so a renormalised prefix is a usable embedding - and only the best
+    | `rescore_pool` are scored at full width. Final scores stay exact, so the
+    | floor above keeps its meaning. On PHP 8.2 with 2,500 chunks this cut two
+    | queries from ~450 ms to ~60 ms. Indexes no larger than the pool are
+    | scanned exactly; coarse_dims = 0 disables the first pass.
+    */
+    'coarse_dims' => (int) env('RAG_COARSE_DIMS', 256),
+    'rescore_pool' => (int) env('RAG_RESCORE_POOL', 100),
 
     /*
     |--------------------------------------------------------------------------

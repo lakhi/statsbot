@@ -549,4 +549,97 @@ class MessagesRagTest extends TestCase
 
         Http::assertNothingSent();
     }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Follow-ups: two searches, one embeddings call
+    |--------------------------------------------------------------------------
+    */
+
+    /** Chat answer as fakeAzure, but one embedding per input, picked by its text. */
+    private function fakeAzureByInput(array $vectors, array $answer): void
+    {
+        Http::fake([
+            '*/embeddings*' => function ($request) use ($vectors) {
+                $data = [];
+                foreach ((array) $request['input'] as $i => $text) {
+                    $data[] = ['embedding' => $vectors[$text] ?? [0, 0, 1], 'index' => $i];
+                }
+
+                return Http::response(['data' => $data]);
+            },
+            '*/chat/completions*' => Http::response([
+                'choices' => [['message' => ['content' => json_encode($answer)]]],
+                'usage' => ['prompt_tokens' => 900, 'completion_tokens' => 300, 'total_tokens' => 1200],
+            ]),
+        ]);
+    }
+
+    private function followUp(): array
+    {
+        return [
+            ['role' => 'user', 'content' => 'what is statistical power?'],
+            ['role' => 'assistant', 'content' => 'Power is the probability of rejecting a false H0.'],
+            ['role' => 'user', 'content' => 'und warum?'],
+        ];
+    }
+
+    public function test_a_follow_up_is_searched_with_and_without_the_previous_question(): void
+    {
+        $this->seedStudent(10000, 'rag_salient');
+        // "und warum?" alone matches nothing; with the previous question it finds the power chunk
+        $this->fakeAzureByInput(["what is statistical power?\nund warum?" => [0, 1, 0]],
+            ['answer' => 'a', 'citations' => ['hyptest-011']]);
+
+        $this->postJson('/api/messages', ['messages' => $this->followUp(), 'started' => 1756800000000])
+            ->assertOk()
+            ->assertJsonPath('sources.0.id', 'hyptest-011');
+
+        $embedCalls = collect(Http::recorded())->filter(fn ($p) => str_contains($p[0]->url(), 'embeddings'));
+        $this->assertCount(1, $embedCalls, 'both searches share one embeddings request');
+        $this->assertSame(['und warum?', "what is statistical power?\nund warum?"], $embedCalls->first()[0]['input']);
+
+        $chunks = json_decode(History::first()->kb_chunks, true);
+        // assertEquals: json_encode writes the score 1.0 as 1
+        $this->assertEquals([['id' => 'hyptest-011', 'score' => 1.0, 'q' => 1]], $chunks,
+            'the context search found it, and history says so');
+        $this->assertSame('und warum?', History::first()->sent, 'history.sent stays the student\'s own words');
+    }
+
+    public function test_both_rag_arms_still_send_identical_requests_on_a_follow_up(): void
+    {
+        $student = $this->seedStudent(10000, 'rag_salient');
+        $this->fakeAzureByInput(["what is statistical power?\nund warum?" => [0, 1, 0]],
+            ['answer' => 'a', 'citations' => ['hyptest-011']]);
+
+        $this->postJson('/api/messages', ['messages' => $this->followUp(), 'started' => 1756800000000])->assertOk();
+        $student->forceFill(['arm' => 'rag_nonsalient'])->save();
+        $this->postJson('/api/messages', ['messages' => $this->followUp(), 'started' => 1756800000000])->assertOk();
+
+        $bodies = collect(Http::recorded())->map(fn ($p) => $p[0]->url().' '.$p[0]->body())->values();
+        $this->assertCount(4, $bodies);
+        $this->assertSame($bodies[0], $bodies[2], 'embeddings requests are identical across arms');
+        $this->assertSame($bodies[1], $bodies[3], 'chat requests are identical across arms');
+    }
+
+    public function test_salient_chips_carry_the_label_parts_when_the_index_has_them(): void
+    {
+        $meta = json_decode(file_get_contents($this->indexBase.'.json'), true);
+        $meta['chunks'][0] += [
+            'citation' => 'Statistik I · Vorlesung 12: Statistischer Hypothesentest · Folie 21',
+            'cite_course' => 'Statistik I', 'cite_doc' => 'Vorlesung 12',
+            'cite_topic' => 'Statistischer Hypothesentest', 'cite_pos' => 'Folie 21',
+        ];
+        file_put_contents($this->indexBase.'.json', json_encode($meta));
+        $this->seedStudent(10000, 'rag_salient');
+        $this->fakeAzure(['answer' => 'a', 'citations' => ['hyptest-003']]);
+
+        $chip = $this->ask('what is a p-value?')->assertOk()->json('sources.0');
+
+        $this->assertSame('Statistik I · Vorlesung 12: Statistischer Hypothesentest · Folie 21', $chip['label']);
+        $this->assertSame(['course' => 'Statistik I', 'doc' => 'Vorlesung 12',
+            'topic' => 'Statistischer Hypothesentest', 'pos' => 'Folie 21'], $chip['cite']);
+        $this->assertSame($chip, json_decode(History::first()->sources_shown, true)[0],
+            'a reloaded thread replays exactly the chip that was shown');
+    }
 }

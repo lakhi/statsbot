@@ -187,7 +187,7 @@ class TutorPrompt
                     'id' => $id,
                     'label' => $byId[$id]['label'],
                     'score' => $byId[$id]['score'],
-                ];
+                ] + (isset($byId[$id]['cite']) ? ['cite' => $byId[$id]['cite']] : []);
             } else {
                 Log::warning('TutorPrompt: model cited an id that was not retrieved', ['id' => $id]);
             }
@@ -210,8 +210,12 @@ class TutorPrompt
      * An empty result is meaningful - the salient arm then shows its "no
      * matching course material" note.
      *
-     * @param  array<int,array{id:string,label:string,score:float}>  $sources
-     * @return array<int,array{id:string,label:string}>
+     * Each chip also carries the label's parts (`cite`: course, doc, topic, pos)
+     * when the index has them, so the UI can shorten the topic alone; the full
+     * label is always present and is what dedupe and history key on.
+     *
+     * @param  array<int,array{id:string,label:string,score:float,cite?:array<string,?string>}>  $sources
+     * @return array<int,array{id:string,label:string,cite?:array<string,?string>}>
      */
     public static function displaySources(array $sources): array
     {
@@ -225,7 +229,8 @@ class TutorPrompt
             if (count($shown) >= $max) {
                 break;
             }
-            $shown[$s['label']] ??= ['id' => $s['id'], 'label' => $s['label']];
+            $shown[$s['label']] ??= ['id' => $s['id'], 'label' => $s['label']]
+                + (isset($s['cite']) ? ['cite' => $s['cite']] : []);
         }
 
         return array_values($shown);

@@ -195,4 +195,202 @@ class KbRetrieverTest extends TestCase
         $this->assertSame([], (new KbRetriever)->search('   '));
         Http::assertNothingSent();
     }
+
+    /** One embedding per input, chosen by the input text, so tests can steer each search. */
+    private function fakeVectorsByInput(array $byText): void
+    {
+        Http::fake([
+            '*/embeddings*' => function ($request) use ($byText) {
+                $data = [];
+                foreach ((array) $request['input'] as $i => $text) {
+                    $data[] = ['embedding' => $byText[$text], 'index' => $i];
+                }
+
+                // reversed on purpose: the API's `index`, not array order, is authoritative
+                return Http::response(['data' => array_reverse($data)]);
+            },
+        ]);
+    }
+
+    public function test_queries_for_a_first_message_is_the_message_alone(): void
+    {
+        $this->assertSame(['what is a p-value?'], KbRetriever::queriesFor([
+            ['role' => 'user', 'content' => '  what is a p-value? '],
+        ]));
+    }
+
+    public function test_queries_for_a_follow_up_add_the_previous_student_message_only(): void
+    {
+        $queries = KbRetriever::queriesFor([
+            ['role' => 'user', 'content' => 'what is a t-test?'],
+            ['role' => 'assistant', 'content' => 'A long tutor answer that must not reach the search.'],
+            ['role' => 'user', 'content' => 'und warum?'],
+        ]);
+
+        $this->assertSame(['und warum?', "what is a t-test?\nund warum?"], $queries);
+    }
+
+    public function test_two_queries_go_out_in_one_embeddings_request(): void
+    {
+        $this->writeIndex([[1, 0, 0], [0, 1, 0]]);
+        $this->fakeVectorsByInput(['a' => [1, 0, 0], 'b' => [0, 1, 0]]);
+
+        (new KbRetriever)->search(['a', 'b']);
+
+        Http::assertSentCount(1);
+        Http::assertSent(fn ($request) => $request['input'] === ['a', 'b']);
+    }
+
+    public function test_identical_queries_are_sent_once(): void
+    {
+        $this->writeIndex([[1, 0, 0]]);
+        $this->fakeVectorsByInput(['a' => [1, 0, 0]]);
+
+        (new KbRetriever)->search(['a', ' a ']);
+
+        Http::assertSent(fn ($request) => $request['input'] === ['a']);
+    }
+
+    public function test_each_chunk_keeps_its_better_score_and_records_which_search_found_it(): void
+    {
+        // the follow-up alone points nowhere useful; the context search finds chunk 1
+        $this->writeIndex([[1, 0, 0], [0, 1, 0], [0, 0, 1]]);
+        $this->fakeVectorsByInput([
+            'und warum?' => [0.2, 0.0, 0.98],
+            "what is a t-test?\nund warum?" => [0.0, 1.0, 0.0],
+        ]);
+
+        $hits = (new KbRetriever)->search(['und warum?', "what is a t-test?\nund warum?"]);
+
+        $this->assertSame(['testdoc-001', 'testdoc-002'], array_column($hits, 'id'));
+        $this->assertSame([1, 0], array_column($hits, 'q'));
+        $this->assertEqualsWithDelta(1.0, $hits[0]['score'], 0.0001);
+    }
+
+    public function test_a_self_contained_new_question_is_not_diluted_by_the_previous_one(): void
+    {
+        // topic switch: the latest message alone matches chunk 2 perfectly and must stay on top
+        $this->writeIndex([[1, 0, 0], [0, 1, 0], [0, 0, 1]]);
+        $this->fakeVectorsByInput([
+            'what is a chi-square test?' => [0, 0, 1],
+            "what is a t-test?\nwhat is a chi-square test?" => [0.8, 0, 0.6],
+        ]);
+
+        $hits = (new KbRetriever)->search(['what is a chi-square test?', "what is a t-test?\nwhat is a chi-square test?"]);
+
+        $this->assertSame('testdoc-002', $hits[0]['id']);
+        $this->assertSame(0, $hits[0]['q']);
+    }
+
+    public function test_a_vector_count_mismatch_degrades_instead_of_misaligning_queries(): void
+    {
+        $this->writeIndex([[1, 0, 0]]);
+        $this->fakeQueryVector([1, 0, 0]); // one vector for two inputs
+
+        $this->assertSame([], (new KbRetriever)->search(['a', 'b']));
+    }
+
+    /**
+     * 60 chunks in 8 dims whose second half repeats the first, so a chunk's
+     * 4-dim prefix cosine equals its full cosine and the first pass cannot drop
+     * a true top-3 chunk. The two-step scan must then return exactly what the
+     * full scan returns.
+     */
+    public function test_the_two_step_scan_returns_the_same_hits_as_a_full_scan(): void
+    {
+        mt_srand(42);
+        $vectors = [];
+        for ($i = 0; $i < 60; $i++) {
+            $u = [mt_rand() / mt_getrandmax() - 0.5, mt_rand() / mt_getrandmax() - 0.5,
+                mt_rand() / mt_getrandmax() - 0.5, mt_rand() / mt_getrandmax() - 0.5];
+            $v = array_merge($u, $u);
+            $n = sqrt(array_sum(array_map(fn ($x) => $x * $x, $v)));
+            $vectors[] = array_map(fn ($x) => $x / $n, $v);
+        }
+        $this->writeIndex($vectors, ['dims' => 8]);
+        config(['tutor.embed.dims' => 8, 'tutor.min_score' => -1.0, 'tutor.rescore_pool' => 10, 'tutor.coarse_dims' => 4]);
+        $q = [0.3, -0.2, 0.5, 0.1, 0.3, -0.2, 0.5, 0.1];
+
+        $this->fakeQueryVector($q);
+        $twoStep = (new KbRetriever)->search('q');
+
+        config(['tutor.coarse_dims' => 0]);
+        $this->fakeQueryVector($q);
+        $full = (new KbRetriever)->search('q');
+
+        $this->assertCount(3, $full);
+        $this->assertSame(array_column($full, 'id'), array_column($twoStep, 'id'));
+        $this->assertSame(array_column($full, 'score'), array_column($twoStep, 'score'));
+    }
+
+    public function test_the_two_step_scan_applies_the_floor_to_exact_full_width_scores(): void
+    {
+        // chunk 0's prefix matches the query perfectly but its full vector does not:
+        // the first pass shortlists it, and the exact score must still keep it out
+        $s = 1 / sqrt(2);
+        $vectors = [[$s, 0, -$s, 0], [0, $s, 0, $s]];
+        for ($i = 0; $i < 3; $i++) {
+            $vectors[] = [0, 0, 0, 1];
+        }
+        $this->writeIndex($vectors, ['dims' => 4]);
+        config(['tutor.embed.dims' => 4, 'tutor.rescore_pool' => 2, 'tutor.coarse_dims' => 2]);
+        $this->fakeQueryVector([$s, 0, $s, 0]);
+
+        $hits = (new KbRetriever)->search('q');
+
+        $this->assertNotContains('testdoc-000', array_column($hits, 'id'),
+            'a chunk whose exact cosine is 0 must not pass the floor on its prefix score');
+    }
+
+    public function test_citation_parts_travel_with_the_hit_when_the_index_has_them(): void
+    {
+        $this->writeIndex([[1, 0, 0], [0, 1, 0]]);
+        $meta = json_decode(file_get_contents($this->base.'.json'), true);
+        $meta['chunks'][0] += [
+            'citation' => 'Statistik I · Vorlesung 14: t-Test · Folie 11',
+            'cite_course' => 'Statistik I', 'cite_doc' => 'Vorlesung 14',
+            'cite_topic' => 't-Test', 'cite_pos' => 'Folie 11',
+        ];
+        file_put_contents($this->base.'.json', json_encode($meta));
+        config(['tutor.min_score' => 0.0]);
+        $this->fakeQueryVector([0.8, 0.6, 0]);
+
+        $hits = (new KbRetriever)->search('anything');
+
+        $this->assertSame(
+            ['course' => 'Statistik I', 'doc' => 'Vorlesung 14', 'topic' => 't-Test', 'pos' => 'Folie 11'],
+            $hits[0]['cite']
+        );
+        $this->assertNull($hits[1]['cite'], 'chunks without parts carry none');
+    }
+
+    public function test_status_reports_a_loadable_index_and_its_version(): void
+    {
+        $this->writeIndex([[1, 0, 0], [0, 1, 0]]);
+
+        $s = (new KbRetriever)->status();
+
+        $this->assertTrue($s['ok']);
+        $this->assertSame('testdoc@2026-09-02T00:00:00+00:00', $s['version']);
+        $this->assertSame(2, $s['chunks']);
+        $this->assertSame(hash_file('sha256', $this->base.'.json'), $s['sha256']);
+    }
+
+    public function test_status_reports_a_broken_index_without_throwing(): void
+    {
+        $this->writeIndex([[1, 0, 0]], ['model' => 'text-embedding-3-small']);
+
+        $s = (new KbRetriever)->status();
+
+        $this->assertFalse($s['ok']);
+        $this->assertStringContainsString('text-embedding-3-small', $s['error']);
+    }
+
+    public function test_kb_status_command_fails_when_the_index_cannot_load(): void
+    {
+        $this->artisan('kb:status')->assertExitCode(1);
+
+        $this->writeIndex([[1, 0, 0]]);
+        $this->artisan('kb:status')->expectsOutputToContain('index OK: testdoc@')->assertExitCode(0);
+    }
 }
